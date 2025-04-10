@@ -60,7 +60,7 @@ void setup() {
   tft.drawString("Connected to WiFi", 10, 10);
   Serial.println("Connected to WiFi");
   // Add your code bellow
-  // Show boot screen
+  // Use Case 1.1: Show boot screen
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setTextSize(2);
