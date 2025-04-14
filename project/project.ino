@@ -77,7 +77,7 @@ void setup() {
 
   tft.fillScreen(TFT_BLACK); // Clear for next screen
 
-  // Use case 1.2: Fetch and display the 24-hour weather forecast
+  // Use case 1.2: Fetch and display the 24-hour weather forecast.
   // fetchAndDisplayForecast();
 }
 
