@@ -66,6 +66,7 @@ void setup() {
 
   // Show Boot Screen (US1.1)
   showBootScreen();
+}
 
 /**
  * This is the main loop function that runs continuously after setup.
