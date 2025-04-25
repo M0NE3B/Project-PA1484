@@ -10,6 +10,7 @@
 #include <WiFi.h>
 #include <esp_task_wdt.h>
 #include <time.h>
+#include <WiFiClientSecure.h>
 
 // Remember to remove these before commiting in GitHub
 String ssid = "BTH_Guest";
@@ -23,10 +24,7 @@ TFT_eSPI tft = TFT_eSPI();
 #define DISPLAY_HEIGHT 170
 
 // SMHI API endpoint for Karlskrona
-const char* forecastUrl =
-  "https://opendata-download-metfcst.smhi.se/"
-  "api/category/pmp3g/version/2/"
-  "geotype/point/lon/15.5904/lat/56.1824/data.json";
+const char* forecastUrl = "https://opendata-download-metfcst.smhi.se/api/category/pmp3g/version/2/geotype/point/lon/15.59/lat/56.18/data.json";
 
 // Data structure for one hour’s forecast
 struct ForecastHour {
@@ -111,84 +109,128 @@ int centerX(const char *msg, int textSize) {
 
 void showBootScreen() {
   tft.fillScreen(TFT_BLACK);
-  tft.setTextSize(2);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
-
-  const char *title = "Weather Dashboard";
-  const char *version = "Version: 2.0";
-  const char *team = "Team: Group 6";
-
-  tft.drawString(title, centerX(title, 2), 40);
-  tft.drawString(version, centerX(version, 2), 70);
-  tft.drawString(team, centerX(team, 2), 100);
-
-  delay(3000);
+  tft.setTextSize(2);
+  
+  // Center text calculations
+  int centerX = DISPLAY_WIDTH/2;
+  
+  tft.drawString("Weather Dashboard", centerX - tft.textWidth("Weather Dashboard", 2)/2, 40);
+  tft.drawString("Version 2.0", centerX - tft.textWidth("Version 2.0", 2)/2, 70);
+  tft.drawString("Team Group 6", centerX - tft.textWidth("Team Group 6", 2)/2, 100);
+  
+  delay(3000); // Display for 3 seconds
   tft.fillScreen(TFT_BLACK);
 }
 
 bool fetch24hForecast() {
   Serial.println("Fetching 24h forecast...");
+  
+  WiFiClientSecure *client = new WiFiClientSecure;
+  client->setInsecure(); // Skip SSL verification
+  
   HTTPClient http;
-  WiFiClientSecure* secureClient = new WiFiClientSecure();
-  secureClient->setInsecure();
-
-  if (!http.begin(*secureClient, forecastUrl)) {
+  if (!http.begin(*client, forecastUrl)) {
     Serial.println("HTTP begin failed");
-    delete secureClient;
+    delete client;
     return false;
   }
 
-  int code = http.GET();
-  if (code != HTTP_CODE_OK) {
-    Serial.printf("HTTP GET failed: %d\n", code);
+  int httpCode = http.GET();
+  if (httpCode != HTTP_CODE_OK) {
+    Serial.printf("HTTP GET failed: %d\n", httpCode);
     http.end();
-    delete secureClient;
+    delete client;
     return false;
   }
 
-  String payload = http.getString();
+  // Use streaming parser to handle large response
+  Serial.println("Parsing JSON...");
+  DynamicJsonDocument doc(32768); // 32KB buffer (reduced from 250KB)
+  DeserializationError error = deserializeJson(doc, http.getStream());
   http.end();
-  delete secureClient;
+  delete client;
 
-  DeserializationError err = deserializeJson(forecastDoc, payload);
-  if (err) {
+  if (error) {
     Serial.print("JSON parse failed: ");
-    Serial.println(err.c_str());
+    Serial.println(error.c_str());
     return false;
   }
 
-  JsonArray ts = forecastDoc["timeSeries"].as<JsonArray>();
-  for (int i = 0; i < 24 && i < ts.size(); i++) {
-    forecast24h[i].time   = String(ts[i]["validTime"].as<const char*>());
-    forecast24h[i].temp   = 0;
-    forecast24h[i].symbol = -1;
-
-    for (JsonObject p : ts[i]["parameters"].as<JsonArray>()) {
-      const char* name = p["name"].as<const char*>();
-      if (strcmp(name, "t") == 0) {
-        forecast24h[i].temp = p["values"][0].as<float>();
-      } else if (strcmp(name, "Wsymb2") == 0) {
-        forecast24h[i].symbol = p["values"][0].as<int>();
-      }
+  JsonArray timeSeries = doc["timeSeries"];
+  for (int i = 0; i < min(24, (int)timeSeries.size()); i++) {
+    JsonObject entry = timeSeries[i];
+    forecast24h[i].time = entry["validTime"].as<String>().substring(11, 16); // Get HH:MM
+    
+    JsonArray parameters = entry["parameters"];
+    for (JsonObject param : parameters) {
+      String name = param["name"];
+      if (name == "t") forecast24h[i].temp = param["values"][0];
+      if (name == "Wsymb2") forecast24h[i].symbol = param["values"][0];
     }
   }
 
-  Serial.println("Forecast parsed OK");
+  Serial.println("Forecast parsed successfully");
   return true;
 }
 
-// Simple text list: “00h: 5.3 °C”
 void display24hForecastText() {
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  
+  // Header
+  tft.setTextSize(2);
+  tft.drawString("24h Forecast", 10, 10);
+  
+  // Display 8 key points (every 3 hours)
   tft.setTextSize(1);
-  tft.drawString("Next 24h Temp (°C)", 0, 0);
+  for (int i = 0; i < 8; i++) {
+    int idx = i * 3;
+    if (idx >= 24) break;
+    
+    int x = 40 * i + 10;
+    int y = 50;
+    
+    // Time (HH:MM)
+    tft.drawString(forecast24h[idx].time, x, y);
+    
+    // Temperature
+    tft.drawString(String(forecast24h[idx].temp, 1) + "°C", x, y + 20);
+    
+    // Weather symbol (simple representation)
+    drawWeatherSymbol(x + 10, y + 40, forecast24h[idx].symbol);
+  }
+}
 
-  for (int i = 0; i < 24; i++) {
-    int y = 12 + i * 6;
-    String hour = forecast24h[i].time.substring(11, 13);
-    String line = hour + "h: " + String(forecast24h[i].temp, 1);
-    tft.drawString(line, 0, y);
+void drawWeatherSymbol(int x, int y, int symbol) {
+  // Simple visual representations
+  switch(symbol) {
+    case 1: // Clear sky
+      tft.fillCircle(x, y, 8, TFT_YELLOW);
+      break;
+    case 2: // Nearly clear
+      tft.fillCircle(x, y, 8, TFT_YELLOW);
+      tft.fillRect(x-2, y-8, 16, 8, TFT_BLACK);
+      break;
+    case 3: // Variable clouds
+      tft.fillCircle(x, y, 8, TFT_YELLOW);
+      tft.fillRect(x-4, y-8, 20, 8, TFT_BLACK);
+      break;
+    case 4: // Half clear
+      tft.fillCircle(x, y, 8, TFT_YELLOW);
+      tft.fillRect(x-6, y-8, 24, 8, TFT_BLACK);
+      break;
+    case 6: // Overcast
+      tft.fillRect(x-8, y-8, 16, 8, TFT_DARKGREY);
+      break;
+    case 8: // Light showers
+      tft.fillRect(x-8, y-8, 16, 8, TFT_DARKGREY);
+      for (int i = -2; i <= 2; i++) {
+        tft.drawFastVLine(x+i*3, y+10, 6, TFT_BLUE);
+      }
+      break;
+    default:
+      tft.drawString(String(symbol), x-5, y-5);
   }
 }
 
