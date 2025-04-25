@@ -23,27 +23,29 @@ TFT_eSPI tft = TFT_eSPI();
 #define DISPLAY_WIDTH 320
 #define DISPLAY_HEIGHT 170
 
-// SMHI API endpoint for Karlskrona
-const char* forecastUrl = "https://opendata-download-metfcst.smhi.se/api/category/pmp3g/version/2/geotype/point/lon/15.59/lat/56.18/data.json";
+// SMHI endpoint (Karlskrona)
+const char* forecastUrl =
+  "https://opendata-download-metfcst.smhi.se/"
+  "api/category/pmp3g/version/2/"
+  "geotype/point/lon/15.59/lat/56.18/data.json";
 
-// Data structure for one hour’s forecast
+// Forecast data
 struct ForecastHour {
-  String time;    // ISO timestamp
-  float  temp;    // °C
-  int    symbol;  // SMHI icon code
+  String time;
+  float  temp;
+  int    symbol;
 };
 ForecastHour forecast24h[24];
 
-// JSON buffer (≈250 KB)
-StaticJsonDocument<250000> forecastDoc;
+// JSON buffer for other parts of your code
+StaticJsonDocument<10> dummyDoc;  // (not used in fetch)
 
-WiFiClient wifi_client;
-
-// Function Declarations
-void showBootScreen();                          // Boot Screen (US1.1)
-int centerX(const char *msg, int textSize);
-bool fetch24hForecast();                        // US1.2 fetch + parse
-void display24hForecastText();                  // US1.2 display
+// Prototypes
+void showBootScreen();
+int  centerX(const char *msg, int textSize);
+bool fetch24hForecast();
+void display24hForecastText();
+void drawWeatherSymbol(int x, int y, int symbol);
 
 /**
  * Setup function
@@ -84,7 +86,7 @@ void setup() {
   // Show Boot Screen (US1.1)
   showBootScreen();
 
-  // Fetch & display forecast (US1.2)
+  // Fetch + display
   if (fetch24hForecast()) {
     display24hForecastText();
   } else {
@@ -125,14 +127,19 @@ void showBootScreen() {
 
 bool fetch24hForecast() {
   Serial.println("Fetching 24h forecast...");
-  
-  WiFiClientSecure *client = new WiFiClientSecure;
-  client->setInsecure(); // Skip SSL verification
-  
+
+  // 1) Secure client
+  WiFiClientSecure client;
+  client.setInsecure();  // for production, use client.setCACert(...)
+
+  // 2) HTTPClient with settings
   HTTPClient http;
-  if (!http.begin(*client, forecastUrl)) {
-    Serial.println("HTTP begin failed");
-    delete client;
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.useHTTP10(true);                    // avoid chunked-encoding quirks
+  http.addHeader("Accept", "application/json");
+
+  if (!http.begin(client, forecastUrl)) {
+    Serial.println("HTTP.begin() failed");
     return false;
   }
 
@@ -140,33 +147,46 @@ bool fetch24hForecast() {
   if (httpCode != HTTP_CODE_OK) {
     Serial.printf("HTTP GET failed: %d\n", httpCode);
     http.end();
-    delete client;
     return false;
   }
 
-  // Use streaming parser to handle large response
-  Serial.println("Parsing JSON...");
-  DynamicJsonDocument doc(32768); // 32KB buffer (reduced from 250KB)
-  DeserializationError error = deserializeJson(doc, http.getStream());
+  // 3) Read full payload
+  String payload = http.getString();
   http.end();
-  delete client;
 
-  if (error) {
+  Serial.printf("Payload length: %u\n", payload.length());
+  if (payload.length() < 10) {
+    Serial.println("⚠️ Payload too short, check network or URL");
+    return false;
+  }
+  Serial.println("Payload preview:");
+  Serial.println(payload.substring(0, 200));
+  Serial.println("… end preview");
+
+  // 4) Parse with DynamicJsonDocument
+  const size_t JSON_CAPACITY = 150000;  
+  DynamicJsonDocument doc(JSON_CAPACITY);
+  auto err = deserializeJson(doc, payload);
+  if (err) {
     Serial.print("JSON parse failed: ");
-    Serial.println(error.c_str());
+    Serial.println(err.c_str());
     return false;
   }
 
-  JsonArray timeSeries = doc["timeSeries"];
-  for (int i = 0; i < min(24, (int)timeSeries.size()); i++) {
-    JsonObject entry = timeSeries[i];
-    forecast24h[i].time = entry["validTime"].as<String>().substring(11, 16); // Get HH:MM
-    
-    JsonArray parameters = entry["parameters"];
-    for (JsonObject param : parameters) {
-      String name = param["name"];
-      if (name == "t") forecast24h[i].temp = param["values"][0];
-      if (name == "Wsymb2") forecast24h[i].symbol = param["values"][0];
+  // 5) Extract first 24 entries
+  JsonArray ts = doc["timeSeries"].as<JsonArray>();
+  for (int i = 0; i < 24 && i < ts.size(); i++) {
+    forecast24h[i].time   = String(ts[i]["validTime"].as<const char*>()).substring(11,16);
+    forecast24h[i].temp   = 0;
+    forecast24h[i].symbol = -1;
+    for (JsonObject p : ts[i]["parameters"].as<JsonArray>()) {
+      const char* name = p["name"].as<const char*>();
+      if (strcmp(name, "t") == 0) {
+        forecast24h[i].temp = p["values"][0].as<float>();
+      } 
+      else if (strcmp(name, "Wsymb2") == 0) {
+        forecast24h[i].symbol = p["values"][0].as<int>();
+      }
     }
   }
 
@@ -174,33 +194,35 @@ bool fetch24hForecast() {
   return true;
 }
 
+// —————— Display 24h forecast as text ——————
 void display24hForecastText() {
   tft.fillScreen(TFT_BLACK);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  
-  // Header
-  tft.setTextSize(2);
-  tft.drawString("24h Forecast", 10, 10);
-  
-  // Display 8 key points (every 3 hours)
   tft.setTextSize(1);
-  for (int i = 0; i < 8; i++) {
-    int idx = i * 3;
-    if (idx >= 24) break;
-    
-    int x = 40 * i + 10;
-    int y = 50;
-    
-    // Time (HH:MM)
-    tft.drawString(forecast24h[idx].time, x, y);
-    
-    // Temperature
-    tft.drawString(String(forecast24h[idx].temp, 1) + "°C", x, y + 20);
-    
-    // Weather symbol (simple representation)
-    drawWeatherSymbol(x + 10, y + 40, forecast24h[idx].symbol);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString("Next 24h:",  0, 0);
+  for (int i = 0; i < 24; i++) {
+    int y = 10 + i * 6;
+    String line = forecast24h[i].time + "  " + String(forecast24h[i].temp,1) + "°C";
+    tft.drawString(line, 0, y);
   }
 }
+
+// —————— US1.1 Boot Screen ——————
+int centerX(const char *msg, int textSize) {
+  return (DISPLAY_WIDTH - tft.textWidth(msg, textSize)) / 2;
+}
+
+void showBootScreen() {
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString("Weather Dashboard", centerX("Weather Dashboard",2),  40);
+  tft.drawString("Version 2.0",         centerX("Version 2.0",        2),  70);
+  tft.drawString("Team Group 6",        centerX("Team Group 6",       2), 100);
+  delay(3000);
+  tft.fillScreen(TFT_BLACK);
+}
+
 
 void drawWeatherSymbol(int x, int y, int symbol) {
   // Simple visual representations
