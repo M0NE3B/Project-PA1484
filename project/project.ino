@@ -130,15 +130,12 @@ void showBootScreen() {
 bool fetch24hForecast() {
   Serial.println("Fetching 24h forecast...");
 
-  // Create secure client
   WiFiClientSecure *client = new WiFiClientSecure;
-  client->setInsecure(); // Skip SSL verification (for development only)
+  client->setInsecure(); // For development only
   
   HTTPClient http;
-  
-  // Configure HTTP client
-  http.setReuse(false); // Important for stability
-  http.setTimeout(15000); // 15 second timeout
+  http.setReuse(false);
+  http.setTimeout(15000);
   
   if (!http.begin(*client, forecastUrl)) {
     Serial.println("HTTP begin failed");
@@ -146,34 +143,44 @@ bool fetch24hForecast() {
     return false;
   }
 
-  // Add required headers
+  // Add headers to ensure we get JSON
   http.addHeader("Accept", "application/json");
   http.addHeader("Accept-Encoding", "identity"); // Disable compression
 
   int httpCode = http.GET();
+  
   if (httpCode != HTTP_CODE_OK) {
-    Serial.printf("HTTP GET failed: %d - %s\n", httpCode, http.errorToString(httpCode).c_str());
+    Serial.printf("HTTP error: %d - %s\n", httpCode, http.errorToString(httpCode).c_str());
+    printResponseDetails(http); // Debug output
     http.end();
     delete client;
     return false;
   }
 
-  // Check content length
-  int contentLength = http.getSize();
-  Serial.printf("Content length: %d bytes\n", contentLength);
-  
-  // Allocate appropriate buffer size
-  const size_t capacity = contentLength > 0 ? contentLength + 1024 : 50000;
-  DynamicJsonDocument doc(capacity);
-
-  // Parse JSON from stream
-  DeserializationError error = deserializeJson(doc, http.getStream());
+  // Get response as String first for debugging
+  String payload = http.getString();
   http.end();
   delete client;
 
+  // Debug output
+  Serial.println("Raw response (first 200 chars):");
+  Serial.println(payload.substring(0, 200));
+
+  // Check if response looks like JSON
+  if (payload.length() == 0 || payload.charAt(0) != '{') {
+    Serial.println("Response doesn't start with JSON");
+    return false;
+  }
+
+  // Parse JSON with sufficient capacity
+  DynamicJsonDocument doc(50000); // Increased buffer size
+  DeserializationError error = deserializeJson(doc, payload);
+
   if (error) {
-    Serial.print("JSON parse failed: ");
+    Serial.print("JSON parse error: ");
     Serial.println(error.c_str());
+    Serial.println("Problematic JSON section:");
+    Serial.println(payload.substring(error.offset(), error.offset() + 50));
     return false;
   }
 
@@ -201,6 +208,13 @@ bool fetch24hForecast() {
 
   Serial.println("Forecast parsed successfully");
   return true;
+}
+
+void printResponseDetails(HTTPClient &http) {
+  Serial.printf("HTTP status: %d\n", http.getSize());
+  Serial.printf("Response size: %d\n", http.getSize());
+  Serial.println("Headers:");
+  Serial.println(http.getString());
 }
 
 // —————— Display 24h forecast as text ——————
