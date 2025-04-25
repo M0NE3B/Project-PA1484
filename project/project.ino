@@ -22,11 +22,30 @@ TFT_eSPI tft = TFT_eSPI();
 #define DISPLAY_WIDTH 320
 #define DISPLAY_HEIGHT 170
 
+// SMHI API endpoint for Karlskrona
+const char* forecastUrl =
+  "https://opendata-download-metfcst.smhi.se/"
+  "api/category/pmp3g/version/2/"
+  "geotype/point/lon/15.5904/lat/56.1824/data.json";
+
+// Data structure for one hour’s forecast
+struct ForecastHour {
+  String time;    // ISO timestamp
+  float  temp;    // °C
+  int    symbol;  // SMHI icon code
+};
+ForecastHour forecast24h[24];
+
+// JSON buffer (≈250 KB)
+StaticJsonDocument<250000> forecastDoc;
+
 WiFiClient wifi_client;
 
 // Function Declarations
-void showBootScreen(); // Boot Screen (US1.1)
+void showBootScreen();                          // Boot Screen (US1.1)
 int centerX(const char *msg, int textSize);
+bool fetch24hForecast();                        // US1.2 fetch + parse
+void display24hForecastText();                  // US1.2 display
 
 /**
  * Setup function
@@ -66,6 +85,17 @@ void setup() {
 
   // Show Boot Screen (US1.1)
   showBootScreen();
+
+  // Fetch & display forecast (US1.2)
+  if (fetch24hForecast()) {
+    display24hForecastText();
+  } else {
+    tft.fillScreen(TFT_BLACK);
+    tft.setTextColor(TFT_RED, TFT_BLACK);
+    tft.setTextSize(2);
+    tft.drawString("Fetch failed", 10, 10);
+    Serial.println("Failed to get forecast.");
+  }
 }
 
 /**
@@ -94,6 +124,72 @@ void showBootScreen() {
 
   delay(3000);
   tft.fillScreen(TFT_BLACK);
+}
+
+bool fetch24hForecast() {
+  Serial.println("Fetching 24h forecast...");
+  HTTPClient http;
+  WiFiClientSecure* secureClient = new WiFiClientSecure();
+  secureClient->setInsecure();
+
+  if (!http.begin(*secureClient, forecastUrl)) {
+    Serial.println("HTTP begin failed");
+    delete secureClient;
+    return false;
+  }
+
+  int code = http.GET();
+  if (code != HTTP_CODE_OK) {
+    Serial.printf("HTTP GET failed: %d\n", code);
+    http.end();
+    delete secureClient;
+    return false;
+  }
+
+  String payload = http.getString();
+  http.end();
+  delete secureClient;
+
+  DeserializationError err = deserializeJson(forecastDoc, payload);
+  if (err) {
+    Serial.print("JSON parse failed: ");
+    Serial.println(err.c_str());
+    return false;
+  }
+
+  JsonArray ts = forecastDoc["timeSeries"].as<JsonArray>();
+  for (int i = 0; i < 24 && i < ts.size(); i++) {
+    forecast24h[i].time   = String(ts[i]["validTime"].as<const char*>());
+    forecast24h[i].temp   = 0;
+    forecast24h[i].symbol = -1;
+
+    for (JsonObject p : ts[i]["parameters"].as<JsonArray>()) {
+      const char* name = p["name"].as<const char*>();
+      if (strcmp(name, "t") == 0) {
+        forecast24h[i].temp = p["values"][0].as<float>();
+      } else if (strcmp(name, "Wsymb2") == 0) {
+        forecast24h[i].symbol = p["values"][0].as<int>();
+      }
+    }
+  }
+
+  Serial.println("Forecast parsed OK");
+  return true;
+}
+
+// Simple text list: “00h: 5.3 °C”
+void display24hForecastText() {
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(1);
+  tft.drawString("Next 24h Temp (°C)", 0, 0);
+
+  for (int i = 0; i < 24; i++) {
+    int y = 12 + i * 6;
+    String hour = forecast24h[i].time.substring(11, 13);
+    String line = hour + "h: " + String(forecast24h[i].temp, 1);
+    tft.drawString(line, 0, y);
+  }
 }
 
 // TFT Pin check
