@@ -12,7 +12,6 @@
 #include <esp_task_wdt.h>
 #include <time.h>
 
-
 // Remember to remove these before commiting in GitHub
 String ssid = "BTH_Guest";
 String password = "Glass91Volvo";
@@ -164,9 +163,9 @@ bool fetch24hForecast() {
     while (stream->available()) {
       char c = stream->read();
       if (!seenBrace) {
-        if (c == '{"approvedTime"') {
+        if (c == '{') {
           seenBrace = true;
-          payload = '{"approvedTime"';
+          payload = "{";
         }
       } else {
         payload += c;
@@ -175,7 +174,7 @@ bool fetch24hForecast() {
     }
   }
 
-  http.end();  // close connection
+  http.end(); // close connection
 
   Serial.printf("Payload length: %u\n", payload.length());
   Serial.println("First 80 chars:");
@@ -194,11 +193,12 @@ bool fetch24hForecast() {
   // ——— 5) Extract the first 24 hours ———
   JsonArray ts = doc["timeSeries"].as<JsonArray>();
   for (int i = 0; i < 24 && i < ts.size(); i++) {
-    forecast24h[i].time = String(ts[i]["validTime"].as<const char*>()).substring(11,16);
+    forecast24h[i].time =
+        String(ts[i]["validTime"].as<const char *>()).substring(11, 16);
     forecast24h[i].temp = 0;
     forecast24h[i].symbol = -1;
     for (JsonObject p : ts[i]["parameters"].as<JsonArray>()) {
-      const char *name = p["name"].as<const char*>();
+      const char *name = p["name"].as<const char *>();
       if (strcmp(name, "t") == 0)
         forecast24h[i].temp = p["values"][0].as<float>();
       else if (strcmp(name, "Wsymb2") == 0)
@@ -209,7 +209,6 @@ bool fetch24hForecast() {
   Serial.println("Forecast parsed successfully");
   return true;
 }
-
 
 // —————— Display 24h forecast as text ——————
 void display24hForecastText() {
