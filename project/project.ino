@@ -8,9 +8,10 @@
 #include <SPI.h>
 #include <TFT_eSPI.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <esp_task_wdt.h>
 #include <time.h>
-#include <WiFiClientSecure.h>
+
 
 // Remember to remove these before commiting in GitHub
 String ssid = "BTH_Guest";
@@ -24,25 +25,24 @@ TFT_eSPI tft = TFT_eSPI();
 #define DISPLAY_HEIGHT 170
 
 // SMHI endpoint (Karlskrona)
-const char* forecastUrl =
-  "https://opendata-download-metfcst.smhi.se/"
-  "api/category/pmp3g/version/2/"
-  "geotype/point/lon/15.59/lat/56.18/data.json";
+const char *forecastUrl = "https://opendata-download-metfcst.smhi.se/"
+                          "api/category/pmp3g/version/2/"
+                          "geotype/point/lon/15.59/lat/56.18/data.json";
 
 // Forecast data
 struct ForecastHour {
   String time;
-  float  temp;
-  int    symbol;
+  float temp;
+  int symbol;
 };
 ForecastHour forecast24h[24];
 
 // JSON buffer for other parts of your code
-StaticJsonDocument<10> dummyDoc;  // (not used in fetch)
+StaticJsonDocument<10> dummyDoc; // (not used in fetch)
 
 // Prototypes
 void showBootScreen();
-int  centerX(const char *msg, int textSize);
+int centerX(const char *msg, int textSize);
 bool fetch24hForecast();
 void display24hForecastText();
 void drawWeatherSymbol(int x, int y, int symbol);
@@ -113,14 +113,17 @@ void showBootScreen() {
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setTextSize(2);
-  
+
   // Center text calculations
-  int centerX = DISPLAY_WIDTH/2;
-  
-  tft.drawString("Weather Dashboard", centerX - tft.textWidth("Weather Dashboard", 2)/2, 40);
-  tft.drawString("Version 2.0", centerX - tft.textWidth("Version 2.0", 2)/2, 70);
-  tft.drawString("Team Group 6", centerX - tft.textWidth("Team Group 6", 2)/2, 100);
-  
+  int centerX = DISPLAY_WIDTH / 2;
+
+  tft.drawString("Weather Dashboard",
+                 centerX - tft.textWidth("Weather Dashboard", 2) / 2, 40);
+  tft.drawString("Version 2.0", centerX - tft.textWidth("Version 2.0", 2) / 2,
+                 70);
+  tft.drawString("Team Group 6", centerX - tft.textWidth("Team Group 6", 2) / 2,
+                 100);
+
   delay(3000); // Display for 3 seconds
   tft.fillScreen(TFT_BLACK);
 }
@@ -130,12 +133,12 @@ bool fetch24hForecast() {
 
   // 1) Secure client
   WiFiClientSecure client;
-  client.setInsecure();  // for production, use client.setCACert(...)
+  client.setInsecure(); // for production, use client.setCACert(...)
 
   // 2) HTTPClient with settings
   HTTPClient http;
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  http.useHTTP10(true);                    // avoid chunked-encoding quirks
+  http.useHTTP10(true); // avoid chunked-encoding quirks
   http.addHeader("Accept", "application/json");
 
   if (!http.begin(client, forecastUrl)) {
@@ -156,7 +159,7 @@ bool fetch24hForecast() {
 
   Serial.printf("Payload length: %u\n", payload.length());
   if (payload.length() < 10) {
-    Serial.println("⚠️ Payload too short, check network or URL");
+    Serial.println("Payload too short, check network or URL");
     return false;
   }
   Serial.println("Payload preview:");
@@ -164,7 +167,7 @@ bool fetch24hForecast() {
   Serial.println("… end preview");
 
   // 4) Parse with DynamicJsonDocument
-  const size_t JSON_CAPACITY = 150000;  
+  const size_t JSON_CAPACITY = 150000;
   DynamicJsonDocument doc(JSON_CAPACITY);
   auto err = deserializeJson(doc, payload);
   if (err) {
@@ -176,15 +179,15 @@ bool fetch24hForecast() {
   // 5) Extract first 24 entries
   JsonArray ts = doc["timeSeries"].as<JsonArray>();
   for (int i = 0; i < 24 && i < ts.size(); i++) {
-    forecast24h[i].time   = String(ts[i]["validTime"].as<const char*>()).substring(11,16);
-    forecast24h[i].temp   = 0;
+    forecast24h[i].time =
+        String(ts[i]["validTime"].as<const char *>()).substring(11, 16);
+    forecast24h[i].temp = 0;
     forecast24h[i].symbol = -1;
     for (JsonObject p : ts[i]["parameters"].as<JsonArray>()) {
-      const char* name = p["name"].as<const char*>();
+      const char *name = p["name"].as<const char *>();
       if (strcmp(name, "t") == 0) {
         forecast24h[i].temp = p["values"][0].as<float>();
-      } 
-      else if (strcmp(name, "Wsymb2") == 0) {
+      } else if (strcmp(name, "Wsymb2") == 0) {
         forecast24h[i].symbol = p["values"][0].as<int>();
       }
     }
@@ -199,60 +202,44 @@ void display24hForecastText() {
   tft.fillScreen(TFT_BLACK);
   tft.setTextSize(1);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.drawString("Next 24h:",  0, 0);
+  tft.drawString("Next 24h:", 0, 0);
   for (int i = 0; i < 24; i++) {
     int y = 10 + i * 6;
-    String line = forecast24h[i].time + "  " + String(forecast24h[i].temp,1) + "°C";
+    String line =
+        forecast24h[i].time + "  " + String(forecast24h[i].temp, 1) + "°C";
     tft.drawString(line, 0, y);
   }
 }
 
-// —————— US1.1 Boot Screen ——————
-int centerX(const char *msg, int textSize) {
-  return (DISPLAY_WIDTH - tft.textWidth(msg, textSize)) / 2;
-}
-
-void showBootScreen() {
-  tft.fillScreen(TFT_BLACK);
-  tft.setTextSize(2);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.drawString("Weather Dashboard", centerX("Weather Dashboard",2),  40);
-  tft.drawString("Version 2.0",         centerX("Version 2.0",        2),  70);
-  tft.drawString("Team Group 6",        centerX("Team Group 6",       2), 100);
-  delay(3000);
-  tft.fillScreen(TFT_BLACK);
-}
-
-
 void drawWeatherSymbol(int x, int y, int symbol) {
   // Simple visual representations
-  switch(symbol) {
-    case 1: // Clear sky
-      tft.fillCircle(x, y, 8, TFT_YELLOW);
-      break;
-    case 2: // Nearly clear
-      tft.fillCircle(x, y, 8, TFT_YELLOW);
-      tft.fillRect(x-2, y-8, 16, 8, TFT_BLACK);
-      break;
-    case 3: // Variable clouds
-      tft.fillCircle(x, y, 8, TFT_YELLOW);
-      tft.fillRect(x-4, y-8, 20, 8, TFT_BLACK);
-      break;
-    case 4: // Half clear
-      tft.fillCircle(x, y, 8, TFT_YELLOW);
-      tft.fillRect(x-6, y-8, 24, 8, TFT_BLACK);
-      break;
-    case 6: // Overcast
-      tft.fillRect(x-8, y-8, 16, 8, TFT_DARKGREY);
-      break;
-    case 8: // Light showers
-      tft.fillRect(x-8, y-8, 16, 8, TFT_DARKGREY);
-      for (int i = -2; i <= 2; i++) {
-        tft.drawFastVLine(x+i*3, y+10, 6, TFT_BLUE);
-      }
-      break;
-    default:
-      tft.drawString(String(symbol), x-5, y-5);
+  switch (symbol) {
+  case 1: // Clear sky
+    tft.fillCircle(x, y, 8, TFT_YELLOW);
+    break;
+  case 2: // Nearly clear
+    tft.fillCircle(x, y, 8, TFT_YELLOW);
+    tft.fillRect(x - 2, y - 8, 16, 8, TFT_BLACK);
+    break;
+  case 3: // Variable clouds
+    tft.fillCircle(x, y, 8, TFT_YELLOW);
+    tft.fillRect(x - 4, y - 8, 20, 8, TFT_BLACK);
+    break;
+  case 4: // Half clear
+    tft.fillCircle(x, y, 8, TFT_YELLOW);
+    tft.fillRect(x - 6, y - 8, 24, 8, TFT_BLACK);
+    break;
+  case 6: // Overcast
+    tft.fillRect(x - 8, y - 8, 16, 8, TFT_DARKGREY);
+    break;
+  case 8: // Light showers
+    tft.fillRect(x - 8, y - 8, 16, 8, TFT_DARKGREY);
+    for (int i = -2; i <= 2; i++) {
+      tft.drawFastVLine(x + i * 3, y + 10, 6, TFT_BLUE);
+    }
+    break;
+  default:
+    tft.drawString(String(symbol), x - 5, y - 5);
   }
 }
 
