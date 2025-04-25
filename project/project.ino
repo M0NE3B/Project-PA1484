@@ -130,14 +130,16 @@ void showBootScreen() {
 bool fetch24hForecast() {
   Serial.println("Fetching 24h forecast...");
 
-  // ——— 1) Secure client ———
+  // 1) Säker klient
   WiFiClientSecure client;
-  client.setInsecure();
+  client.setInsecure();  // i produktion: använd .setCACert()
 
-  // ——— 2) HTTP setup ———
+  // 2) HTTPClient med HTTP/1.0 + inga kompressioner
   HTTPClient http;
+  http.useHTTP10(true);                         // ➜ undvik chunked
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  http.addHeader("Accept", "application/json");
+  http.addHeader("Accept",          "application/json");
+  http.addHeader("Accept-Encoding", "identity");  // ➜ inga gzip
 
   if (!http.begin(client, forecastUrl)) {
     Serial.println("HTTP.begin() failed");
@@ -151,45 +153,44 @@ bool fetch24hForecast() {
     return false;
   }
 
-  // ——— 3) Read full payload into String ———
+  // 3) Läs hela payload som String
   String payload = http.getString();
   http.end();
 
-  // ——— Debug: skriv ut längd och första 100 tecken ———
+  // 4) Debug: kontrollera att du nu verkligen börjar med '{'
   Serial.printf("JSON length: %u\n", payload.length());
   Serial.println("First 100 chars:");
   Serial.println(payload.substring(0, 100));
 
-  // ——— 4) JSON-parse ———
-  const size_t JSON_CAPACITY = 150000;
+  // 5) Parsea JSON
+  const size_t JSON_CAPACITY = 200000;  // lite extra marginal
   DynamicJsonDocument doc(JSON_CAPACITY);
-  DeserializationError err = deserializeJson(doc, payload);
+  auto err = deserializeJson(doc, payload);
   if (err) {
     Serial.print("JSON parse failed: ");
     Serial.println(err.c_str());
     return false;
   }
 
-  // ——— 5) Extrahera de första 24 timmars data ———
+  // 6) Extrahera de första 24 timmarna
   JsonArray ts = doc["timeSeries"].as<JsonArray>();
   for (int i = 0; i < 24 && i < ts.size(); i++) {
-    forecast24h[i].time = String(ts[i]["validTime"].as<const char*>())
-                          .substring(11, 16);
+    forecast24h[i].time   = String(ts[i]["validTime"].as<const char*>()).substring(11, 16);
     forecast24h[i].temp   = 0;
     forecast24h[i].symbol = -1;
     for (JsonObject p : ts[i]["parameters"].as<JsonArray>()) {
       const char* name = p["name"].as<const char*>();
-      if (strcmp(name, "t") == 0) {
+      if (strcmp(name, "t") == 0)
         forecast24h[i].temp = p["values"][0].as<float>();
-      } else if (strcmp(name, "Wsymb2") == 0) {
+      else if (strcmp(name, "Wsymb2") == 0)
         forecast24h[i].symbol = p["values"][0].as<int>();
-      }
     }
   }
 
   Serial.println("Forecast parsed successfully");
   return true;
 }
+
 
 
 // —————— Display 24h forecast as text ——————
