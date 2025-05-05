@@ -80,6 +80,18 @@ void saveSettings() {
   prefs.end();
 }
 
+// Draws a full‐screen “please wait” message
+void showLoadingScreen(const char *msg) {
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(2);
+  // center horizontally
+  int16_t x = (DISPLAY_WIDTH - tft.textWidth(msg, 2)) / 2;
+  // vertically a bit above center
+  int16_t y = DISPLAY_HEIGHT / 2 - tft.fontHeight(1);
+  tft.drawString(msg, x, y);
+}
+
 // Structure to hold one hour of forecast data
 struct ForecastHour {
   String time;
@@ -554,137 +566,151 @@ void showBootScreen() {
 
 // Fetch the next 24 hours of forecast from SMHI
 bool fetch24hForecast() {
-  Serial.println("Fetching 24h forecast…");
+  const int maxRetries = 3;
 
-  HTTPClient http;
-  // 1) Start the connection
-  http.useHTTP10(true);
-  http.begin(makeForecastUrl());
-  http.addHeader("Accept", "application/json");
-  http.addHeader("Accept-Encoding", "identity");
+  // Try up to maxRetries times
+  for (int attempt = 1; attempt <= maxRetries; ++attempt) {
+    // show the loading screen on each attempt
+    showLoadingScreen("Fetching forecast...");
+    Serial.printf("Fetching 24h forecast (try %d/%d)…\n", attempt, maxRetries);
 
-  // 2) Send the request
-  int httpCode = http.GET();
-  Serial.print("HTTP GET code: ");
-  Serial.println(httpCode);
-  if (httpCode != HTTP_CODE_OK) {
-    Serial.printf("HTTP GET failed: %d — %s\n", httpCode,
-                  http.errorToString(httpCode).c_str());
-    http.end();
-    return false;
-  }
+    HTTPClient http;
+    http.useHTTP10(true);          // force HTTP/1.0
+    http.begin(makeForecastUrl()); // set URL
+    http.addHeader("Accept", "application/json");
+    http.addHeader("Accept-Encoding", "identity"); // no compression
 
-  // 3) Parse directly from the stream
-  const size_t JSON_CAPACITY = 200000;
-  DynamicJsonDocument doc(JSON_CAPACITY);
-  DeserializationError err = deserializeJson(doc, http.getStream());
-  http.end();
+    int httpCode = http.GET(); // perform the GET
+    if (httpCode == HTTP_CODE_OK) {
+      // parse JSON directly from the stream
+      const size_t JSON_CAPACITY = 200000;
+      DynamicJsonDocument doc(JSON_CAPACITY);
+      DeserializationError err = deserializeJson(doc, http.getStream());
+      http.end(); // close connection
 
-  if (err) {
-    Serial.print("JSON parse failed: ");
-    Serial.println(err.c_str());
-    return false;
-  }
-
-  // 4) Extract the first 24 entries
-  JsonArray ts = doc["timeSeries"].as<JsonArray>();
-  Serial.printf("Got %u timeSeries entries\n", ts.size());
-  for (int i = 0; i < 24 && i < ts.size(); i++) {
-    forecast24h[i].time =
-        String(ts[i]["validTime"].as<const char *>()).substring(11, 16);
-    forecast24h[i].temp = 0;
-    forecast24h[i].symbol = -1;
-    for (JsonObject p : ts[i]["parameters"].as<JsonArray>()) {
-      const char *name = p["name"].as<const char *>();
-      if (strcmp(name, "t") == 0) {
-        forecast24h[i].temp = p["values"][0].as<float>();
-      } else if (strcmp(name, "Wsymb2") == 0) {
-        forecast24h[i].symbol = p["values"][0].as<int>();
+      if (!err) {
+        // extract the first 24 hours
+        JsonArray ts = doc["timeSeries"].as<JsonArray>();
+        for (int i = 0; i < 24 && i < ts.size(); i++) {
+          // get time string (HH:MM)
+          forecast24h[i].time =
+              String(ts[i]["validTime"].as<const char *>()).substring(11, 16);
+          forecast24h[i].temp = 0;
+          forecast24h[i].symbol = -1;
+          // walk through all parameters in this hour
+          for (JsonObject p : ts[i]["parameters"].as<JsonArray>()) {
+            const char *name = p["name"].as<const char *>();
+            if (strcmp(name, "t") == 0) {
+              forecast24h[i].temp = p["values"][0].as<float>();
+            } else if (strcmp(name, "Wsymb2") == 0) {
+              forecast24h[i].symbol = p["values"][0].as<int>();
+            }
+          }
+        }
+        Serial.println("Forecast parsed successfully");
+        return true; // success!
+      } else {
+        Serial.printf("JSON parse failed: %s — retrying…\n", err.c_str());
       }
+    } else {
+      Serial.printf("HTTP GET failed: %d — %s — retrying…\n", httpCode,
+                    http.errorToString(httpCode).c_str());
+      http.end();
     }
+
+    delay(200);
   }
 
-  Serial.println("Forecast parsed successfully");
-  return true;
+  Serial.println("All attempts to fetch 24h forecast failed.");
+  showLoadingScreen("Forecast failed");
+  delay(300);
+  return false;
 }
 
 // Fetch daily historical data from Open-Meteo, skipping any days with nulls
 bool fetchHistoryData() {
-  Serial.println("Fetching history…");
-  String url = makeHistoryUrl();
+  const int maxRetries = 3;
 
-  HTTPClient http;
-  http.begin(url);
-  int code = http.GET();
-  Serial.printf("HTTP GET code: %d\n", code);
-  if (code != HTTP_CODE_OK) {
-    Serial.printf("HTTP GET failed: %d — %s\n", code,
-                  http.errorToString(code).c_str());
-    http.end();
-    return false;
-  }
+  // Try up to maxRetries times
+  for (int attempt = 1; attempt <= maxRetries; ++attempt) {
+    showLoadingScreen("Fetching history...");
+    Serial.printf("Fetching history (try %d/%d)…\n", attempt, maxRetries);
 
-  // Read the full payload
-  String body = http.getString();
-  http.end();
+    HTTPClient http;
+    http.begin(makeHistoryUrl()); // set URL
+    int code = http.GET();        // perform the GET
 
-  // Parse JSON
-  const size_t JSON_CAP = 200000;
-  DynamicJsonDocument doc(JSON_CAP);
-  DeserializationError err = deserializeJson(doc, body);
-  if (err) {
-    Serial.print("JSON parse failed: ");
-    Serial.println(err.c_str());
-    return false;
-  }
+    if (code == HTTP_CODE_OK) {
+      String body = http.getString(); // read full payload
+      http.end();                     // close connection
 
-  // Pull out the arrays
-  JsonArray times = doc["hourly"]["time"].as<JsonArray>();
-  JsonArray vals = doc["hourly"][settings.parameter.c_str()].as<JsonArray>();
+      // parse into JSON document
+      const size_t JSON_CAP = 200000;
+      DynamicJsonDocument doc(JSON_CAP);
+      DeserializationError err = deserializeJson(doc, body);
 
-  const uint8_t paramCount = sizeof(paramOptions) / sizeof(paramOptions[0]);
+      if (!err) {
+        // Pull out the time and value arrays
+        JsonArray times = doc["hourly"]["time"].as<JsonArray>();
+        JsonArray vals =
+            doc["hourly"][settings.parameter.c_str()].as<JsonArray>();
 
-  int totalSize = times.size();
-  int need = HISTORY_DAYS * HOURS_PER_DAY;
-  int start = max(0, totalSize - need);
-  int count = min(need, totalSize);
+        int totalSize = times.size();
+        int need = HISTORY_DAYS * HOURS_PER_DAY;
+        int start = max(0, totalSize - need);
+        int count = min(need, totalSize);
 
-  // Clear previous data
-  for (int d = 0; d < HISTORY_DAYS; d++) {
-    historyHoursFetched[d] = 0;
-  }
+        // reset tracking
+        for (int d = 0; d < HISTORY_DAYS; d++) {
+          historyHoursFetched[d] = 0;
+        }
 
-  // Fill, skipping days with any nulls
-  for (int i = 0; i < count; i++) {
-    int idx = start + i;
-    int day = i / HOURS_PER_DAY;
-    int hr = i % HOURS_PER_DAY;
+        // fill each day/hour, skip any day that has nulls
+        for (int i = 0; i < count; i++) {
+          int idx = start + i;
+          int day = i / HOURS_PER_DAY;
+          int hr = i % HOURS_PER_DAY;
 
-    // If this hour is null, skip the rest of the day
-    if (vals[idx].isNull()) {
-      // advance i so that (i % 24) → 23, then the loop i++ jumps to next day
-      i += (HOURS_PER_DAY - hr) - 1;
-      continue;
+          if (vals[idx].isNull()) {
+            // skip the rest of this day if any hour is null
+            i += (HOURS_PER_DAY - hr) - 1;
+            continue;
+          }
+
+          // record date label and value
+          const char *ts = times[idx].as<const char *>();
+          historyDayLabels[day] = String(ts).substring(0, 10);
+          historyHourly[day][hr] = vals[idx].as<float>();
+          historyHoursFetched[day] = hr + 1;
+        }
+
+        // count only fully populated days
+        historyDaysFetched = 0;
+        for (int d = 0; d < HISTORY_DAYS; d++) {
+          if (historyHoursFetched[d] == HOURS_PER_DAY) {
+            historyDaysFetched++;
+          }
+        }
+        currentHistoryDay = historyDaysFetched - 1;
+
+        Serial.printf("  Got %d full days\n", historyDaysFetched);
+        return historyDaysFetched > 0;
+      } else {
+        Serial.printf("JSON parse failed: %s — retrying…\n", err.c_str());
+      }
+    } else {
+      Serial.printf("HTTP GET failed: %d — %s — retrying…\n", code,
+                    http.errorToString(code).c_str());
+      http.end();
     }
 
-    // Store the timestamp (for the label) and the value
-    const char *ts = times[idx].as<const char *>();
-    historyDayLabels[day] = String(ts).substring(0, 10);
-    historyHourly[day][hr] = vals[idx].as<float>();
-    historyHoursFetched[day] = hr + 1;
+    delay(200);
   }
 
-  // Count only the fully-populated days
-  historyDaysFetched = 0;
-  for (int d = 0; d < HISTORY_DAYS; d++) {
-    if (historyHoursFetched[d] == HOURS_PER_DAY) {
-      historyDaysFetched++;
-    }
-  }
-  currentHistoryDay = historyDaysFetched - 1;
-
-  Serial.printf("  Got %d full days\n", historyDaysFetched);
-  return historyDaysFetched > 0;
+  Serial.println("All attempts to fetch history failed.");
+  showLoadingScreen("History failed");
+  delay(300);
+  return false;
 }
 
 void displayForecastCard(uint8_t idx) {
@@ -772,7 +798,7 @@ void displayHistoryGraph(int dayIdx) {
   float mn = 1e6, mx = -1e6;
   for (int h = 0; h < hoursAvail; h++) {
     float v = historyHourly[dayIdx][h];
-    if (settings.parameter == "t")
+    if (settings.parameter == paramOptions[0].key)
       v = toDisplayTemp(v);
     mn = min(mn, v);
     mx = max(mx, v);
@@ -808,8 +834,9 @@ void displayHistoryGraph(int dayIdx) {
   int prevX = -1, prevY = -1;
   for (int h = 0; h < hoursAvail; h++) {
     float v = historyHourly[dayIdx][h];
-    if (settings.parameter == "t")
+    if (settings.parameter == paramOptions[0].key) {
       v = toDisplayTemp(v);
+    }
     int x = gx0 + (gx1 - gx0) * h / HOURS_PER_DAY;
     int y = map(v, yMin, yMax, gy0, gy1);
 
