@@ -46,10 +46,21 @@ struct Settings {
 Settings settings;
 Preferences prefs;
 
+struct Param {
+  const char *key;
+  const char *label;
+};
+const Param paramOptions[] = {{"temperature_2m", "Temperature"},
+                              {"relative_humidity_2m", "Relative Humidity"},
+                              {"windspeed_10m", "Windspeed"},
+                              {"precipitation", "Precipitation"}};
+const uint8_t paramCount = sizeof(paramOptions) / sizeof(paramOptions[0]);
+uint8_t paramIndex = 0;
+
 void loadSettings() {
   prefs.begin("weather", false);
   settings.city = prefs.getString("city", "Karlskrona");
-  settings.parameter = prefs.getString("param", "t");
+  settings.parameter = prefs.getString("param", paramOptions[0].key);
   settings.useFahrenheit = prefs.getBool("fahrenheit", false);
   prefs.end();
   // sync the index so makeForecastUrl/HistoryUrl pick the right lat/lon
@@ -98,13 +109,13 @@ static int historyHoursFetched[HISTORY_DAYS];
 
 // human‑friendly names for parameters
 String parameterLabel(const String &p) {
-  if (p == "t")
+  if (p == "temperature_2m")
     return "Temperature";
-  if (p == "r")
+  if (p == "relative_humidity_2m")
     return "Humidity";
-  if (p == "ws")
+  if (p == "windspeed_10m")
     return "Wind Speed";
-  if (p == "p")
+  if (p == "precipitation")
     return "Precipitation";
   return p;
 }
@@ -152,22 +163,18 @@ String makeHistoryUrl() {
   strftime(bufStart, sizeof(bufStart), "%Y-%m-%d", &tm_start);
   strftime(bufEnd, sizeof(bufEnd), "%Y-%m-%d", &tm_end);
 
-  // map your one‑letter param to the Open‑Meteo hourly name
-  const char *varname = "temperature_2m";
-  if (settings.parameter == "r")
-    varname = "relativehumidity_2m";
-  else if (settings.parameter == "ws")
-    varname = "windspeed_10m";
-  else if (settings.parameter == "p")
-    varname = "precipitation";
-
   char url[256];
+  String fieldList = String(paramOptions[0].key);
+  for (uint8_t i = 1; i < paramCount; ++i) {
+    fieldList += "," + String(paramOptions[i].key);
+  }
+
   snprintf(url, sizeof(url),
            "https://archive-api.open-meteo.com/v1/archive?"
            "latitude=%.5f&longitude=%.5f&"
            "hourly=%s&"
-           "start_date=%s&end_date=%s&timezone=Europe/Stockholm",
-           c.lat, c.lon, varname, bufStart, bufEnd);
+           "start_date=%s&end_date=%s&timezone=Europe%%2FStockholm",
+           c.lat, c.lon, fieldList.c_str(), bufStart, bufEnd);
 
   Serial.print("History URL: ");
   Serial.println(url);
@@ -185,29 +192,6 @@ const char *settingsItems[] = {"City", "Parameter", "Change unit",
 const uint8_t settingsCount = sizeof(settingsItems) / sizeof(settingsItems[0]);
 uint8_t settingsIndex = 0;
 
-const char *paramOptions[] = {"Air pressure (msl)",
-                              "Air temperature (t)",
-                              "Horizontal visibility (vis)",
-                              "Wind direction (wd)",
-                              "Wind speed (ws)",
-                              "Relative humidity (r)",
-                              "Thunder probability (tstm)",
-                              "Mean total cloud cover (tcc_mean)",
-                              "Mean low‑level cloud cover (lcc_mean)",
-                              "Mean medium‑level cloud cover (mcc_mean)",
-                              "Mean high‑level cloud cover (hcc_mean)",
-                              "Wind gust speed (gust)",
-                              "Min precipitation intensity (pmin)",
-                              "Max precipitation intensity (pmax)",
-                              "Percent frozen precipitation (spp)",
-                              "Precipitation category (pcat)",
-                              "Mean precipitation intensity (pmean)",
-                              "Median precipitation intensity (pmedian)",
-                              "Weather symbol (Wsymb2)"};
-const uint8_t paramCount = sizeof(paramOptions) / sizeof(paramOptions[0]);
-static const uint8_t VISIBLE_PARAM_COUNT = 5;
-uint8_t paramIndex = 0;
-uint8_t paramScroll = 0;
 static const uint8_t VISIBLE_CITY_COUNT = 5; // show 5 at a time
 uint8_t cityIndex = 0;  // which entry is currently highlighted
 uint8_t cityScroll = 0; // top of the scrolling window
@@ -386,7 +370,7 @@ void loop() {
       case 1: // Parameter
         Serial.println("Parameter settings");
         for (uint8_t i = 0; i < paramCount; i++) {
-          if (settings.parameter == paramOptions[i]) {
+          if (settings.parameter == paramOptions[i].key) {
             paramIndex = i;
             break;
           }
@@ -403,7 +387,7 @@ void loop() {
         break;
       case 3:
         Serial.println("Reset settings");
-        settings = {"Karlskrona", "t", false};
+        settings = {"Karlskrona", paramOptions[0].key, false};
         break;
       }
       saveSettings();
@@ -426,12 +410,7 @@ void loop() {
 
   if (currentScreen == SCREEN_PARAM_SELECT) {
     if (down && up) {
-      String opt = String(paramOptions[paramIndex]);
-      int a = opt.lastIndexOf('('), b = opt.lastIndexOf(')');
-      if (a >= 0 && b > a)
-        settings.parameter = opt.substring(a + 1, b);
-      else
-        settings.parameter = opt;
+      settings.parameter = paramOptions[paramIndex].key;
       saveSettings();
       currentScreen = SCREEN_SETTINGS;
       showSettingsScreen();
@@ -444,25 +423,12 @@ void loop() {
     }
 
     if (down) {
-      if (paramIndex < paramCount - 1) {
-        paramIndex++;
-        if (paramIndex >= paramScroll + VISIBLE_PARAM_COUNT)
-          paramScroll++;
-      }
+      paramIndex = (paramIndex + 1) % paramCount;
       showParameterScreen();
-      delay(200);
-      return;
     }
-
     if (up) {
-      if (paramIndex > 0) {
-        paramIndex--;
-        if (paramIndex < paramScroll)
-          paramScroll--;
-      }
+      paramIndex = (paramIndex + paramCount - 1) % paramCount;
       showParameterScreen();
-      delay(200);
-      return;
     }
   }
 
@@ -624,16 +590,17 @@ bool fetch24hForecast() {
   JsonArray ts = doc["timeSeries"].as<JsonArray>();
   Serial.printf("Got %u timeSeries entries\n", ts.size());
   for (int i = 0; i < 24 && i < ts.size(); i++) {
-    String vt = ts[i]["validTime"].as<const char *>();
-    forecast24h[i].time = vt.substring(11, 16);
+    forecast24h[i].time =
+        String(ts[i]["validTime"].as<const char *>()).substring(11, 16);
     forecast24h[i].temp = 0;
     forecast24h[i].symbol = -1;
     for (JsonObject p : ts[i]["parameters"].as<JsonArray>()) {
       const char *name = p["name"].as<const char *>();
-      if (strcmp(name, settings.parameter.c_str()) == 0)
+      if (strcmp(name, "t") == 0) {
         forecast24h[i].temp = p["values"][0].as<float>();
-      else if (strcmp(name, "Wsymb2") == 0)
+      } else if (strcmp(name, "Wsymb2") == 0) {
         forecast24h[i].symbol = p["values"][0].as<int>();
+      }
     }
   }
 
@@ -673,11 +640,9 @@ bool fetchHistoryData() {
 
   // Pull out the arrays
   JsonArray times = doc["hourly"]["time"].as<JsonArray>();
-  const char *field = (settings.parameter == "t")    ? "temperature_2m"
-                      : (settings.parameter == "r")  ? "relativehumidity_2m"
-                      : (settings.parameter == "ws") ? "windspeed_10m"
-                                                     : "precipitation";
-  JsonArray vals = doc["hourly"][field].as<JsonArray>();
+  JsonArray vals = doc["hourly"][settings.parameter.c_str()].as<JsonArray>();
+
+  const uint8_t paramCount = sizeof(paramOptions) / sizeof(paramOptions[0]);
 
   int totalSize = times.size();
   int need = HISTORY_DAYS * HOURS_PER_DAY;
@@ -820,10 +785,14 @@ void displayHistoryGraph(int dayIdx) {
   // 5) Y‑ticks every 5 units
   tft.setTextSize(1);
   tft.setTextDatum(TR_DATUM);
-  for (int yv = yMin; yv <= yMax; yv += 5) {
-    int yy = map(yv, yMin, yMax, gy0, gy1);
+  int tickCount = 5;
+  float rawStep = float(yMax - yMin) / (tickCount - 1);
+  int step5 = roundUp5(ceil(rawStep)); // e.g. 17→20, 3→5
+
+  for (int v = yMin; v <= yMax; v += step5) {
+    int yy = map(v, yMin, yMax, gy0, gy1);
     tft.drawLine(gx0 - 3, yy, gx0, yy, TFT_WHITE);
-    tft.drawString(String(yv), gx0 - 5, yy);
+    tft.drawString(String(v), gx0 - 5, yy);
   }
 
   // 6) X‑ticks every 4h from 0→24
@@ -884,7 +853,13 @@ void showSettingsScreen() {
   tft.setTextDatum(TL_DATUM);
 
   String sCity = "City: " + settings.city;
-  String sParam = "Parameter: " + settings.parameter;
+  String sParam = "Parameter: ";
+  for (uint8_t i = 0; i < paramCount; ++i) {
+    if (settings.parameter == paramOptions[i].key) {
+      sParam += paramOptions[i].label;
+      break;
+    }
+  }
   String sUnits = "Units:";
 
   // Measure widths to align left edges
@@ -920,43 +895,23 @@ void showParameterScreen() {
   tft.setTextDatum(TL_DATUM);
   tft.drawString("Choose parameter:", 10, 10);
 
-  // 2) Compute metrics for the list
-  tft.setTextSize(1);
-  int fh = tft.fontHeight(); // height of size‑1 font
-  int lineH = fh + 6;        // spacing between entries
-  int startY = 50;           // push the list down
+  // 2) List items
+  tft.setTextSize(2);
+  tft.setTextDatum(TL_DATUM);
+  int fh = tft.fontHeight();
+  int lineH = fh + 6;
+  int startY = 50;
 
-  // 3) Draw the window of 5 entries
-  for (uint8_t i = 0; i < VISIBLE_PARAM_COUNT; i++) {
-    uint8_t idx = paramScroll + i;
-    if (idx >= paramCount)
-      break;
+  for (uint8_t i = 0; i < paramCount; ++i) {
     int y = startY + i * lineH;
-
-    if (idx == paramIndex) {
+    if (i == paramIndex) {
       // highlight the selected row
       tft.fillRect(0, y - 2, DISPLAY_WIDTH, lineH, TFT_DARKGREY);
       tft.setTextColor(TFT_YELLOW, TFT_DARKGREY);
     } else {
       tft.setTextColor(TFT_WHITE, TFT_BLACK);
     }
-    tft.drawString(paramOptions[idx], 10, y);
-  }
-
-  // 4) Up‐arrow if there’s more above
-  if (paramScroll > 0) {
-    tft.setTextSize(1);
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.setTextDatum(TC_DATUM);
-    tft.drawString("^", DISPLAY_WIDTH / 2, startY - lineH / 2);
-  }
-
-  // 5) Down‐arrow if there’s more below
-  if (paramScroll + VISIBLE_PARAM_COUNT < paramCount) {
-    tft.setTextSize(1);
-    tft.setTextDatum(TC_DATUM);
-    tft.drawString("v", DISPLAY_WIDTH / 2,
-                   startY + VISIBLE_PARAM_COUNT * lineH);
+    tft.drawString(paramOptions[i].label, 10, y);
   }
 }
 
@@ -972,7 +927,7 @@ void showCityScreen() {
   // 2) Draw the list in the same datum & color
   tft.setTextSize(2);
   tft.setTextDatum(TL_DATUM);
-  int fh = tft.fontHeight(); // for size==2
+  int fh = tft.fontHeight();
   int lineH = fh + 6;
   int startY = 50;
 
