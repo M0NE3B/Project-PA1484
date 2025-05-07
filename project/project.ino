@@ -13,8 +13,8 @@
 #include <time.h>
 
 // Remember to remove these before commiting in GitHub
-String ssid = "TP-link_S41F";
-String password = "325v2hk4";
+String ssid = "BTH_Guest";
+String password = "Rover21Piggelin";
 
 // "tft" is the graphics libary, which has functions to draw on the screen
 TFT_eSPI tft = TFT_eSPI();
@@ -143,7 +143,8 @@ enum Screen {
   SCREEN_HISTORY,
   SCREEN_SETTINGS,
   SCREEN_PARAM_SELECT,
-  SCREEN_CITY_SELECT
+  SCREEN_CITY_SELECT,
+  SCREEN_SWEDEN_MAP
 };
 
 Screen currentScreen = SCREEN_MENU;
@@ -194,7 +195,7 @@ String makeHistoryUrl() {
 }
 
 // Menu items and index
-const char *menuItems[] = {"Forecast", "History", "Settings"};
+const char *menuItems[] = {"Forecast", "History", "Sweden Map", "Settings"};
 const uint8_t menuItemCount = sizeof(menuItems) / sizeof(menuItems[0]);
 uint8_t menuIndex = 0;
 
@@ -524,7 +525,11 @@ void loop() {
           displayHistoryGraph(currentHistoryDay);
         }
         break;
-      case 2:
+      case 2: // Sweden Map
+        currentScreen = SCREEN_SWEDEN_MAP;
+        showSwedenForecastScreen();
+        break;
+      case 3:
         currentScreen = SCREEN_SETTINGS;
         settingsIndex = 0;
         Serial.println("Showing settings...");
@@ -985,6 +990,100 @@ void showCityScreen() {
   if (cityScroll + VISIBLE_CITY_COUNT < cityCount) {
     tft.drawString("v", DISPLAY_WIDTH / 2, startY + VISIBLE_CITY_COUNT * lineH);
   }
+}
+
+void showSwedenForecastScreen() {
+  // 1) Clear & title
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_BLUE, TFT_BLACK);
+  tft.setTextDatum(TL_DATUM);
+  tft.drawString("Sweden Forecast", 10, 10);
+
+  // 2) Draw base map (you need to convert your .bmp to a byte array)
+  //    Example: tft.pushImage(0, 25, SWEDEN_MAP_W, SWEDEN_MAP_H, swedenMapBMP);
+  //    You’ll need to prepare that bitmap in your data folder.
+
+  // 3) Fetch county forecasts
+  struct County {
+    const char *id;     // SMHI county ID e.g. "14" (Blekinge län)
+    uint16_t centroidX; // on‐screen pixel
+    uint16_t centroidY;
+  };
+  static const County counties[] = {
+      {"10", 45, 120}, // example coords
+      {"12", 90, 60},
+      // … all 21 län…
+  };
+  const int countyCount = sizeof(counties) / sizeof(counties[0]);
+
+  // Pre‐fetch 24h for each county into a temp buffer:
+  struct CountyForecast {
+    float temp[24];
+    int symbol[24];
+  };
+  static CountyForecast cf[21];
+
+  showLoadingScreen("Fetching Sweden...");
+  for (int ci = 0; ci < countyCount; ++ci) {
+    // build URL:  api/category/pmp3g/version/2/geotype/county/{id}/data.json
+    String url = String("https://opendata-download-metfcst.smhi.se/") +
+                 "api/category/pmp3g/version/2/geotype/county/id/" +
+                 counties[ci].id + "/data.json";
+
+    HTTPClient http;
+    http.begin(url);
+    int code = http.GET();
+    if (code == HTTP_CODE_OK) {
+      DynamicJsonDocument doc(150000);
+      auto err = deserializeJson(doc, http.getStream());
+      if (!err) {
+        auto ts = doc["timeSeries"].as<JsonArray>();
+        for (int h = 0; h < 24 && h < ts.size(); ++h) {
+          cf[ci].temp[h] =
+              ts[h]["parameters"][0]["values"][0].as<float>(); // find “t”
+          cf[ci].symbol[h] =
+              ts[h]["parameters"][1]["values"][0].as<int>(); // find “Wsymb2”
+        }
+      }
+    }
+    http.end();
+    delay(100); // be nice to SMHI
+  }
+
+  // 4) Animate 24 h
+  for (int hour = 0; hour < 24; ++hour) {
+    // redraw map
+    // tft.pushImage(0,25, SWEDEN_MAP_W, SWEDEN_MAP_H, swedenMapBMP);
+
+    // overlay each county
+    for (int ci = 0; ci < countyCount; ++ci) {
+      float c = toDisplayTemp(cf[ci].temp[hour]);
+      // map temp→color (blue→cyan→green→yellow→red)
+      uint16_t col = tft.color565(constrain((c + 20) * 4, 0, 255), // rough ramp
+                                  constrain((30 - c) * 4, 0, 255),
+                                  constrain((20 - c) * 4, 0, 255));
+      // fill a small square at centroid
+      tft.fillRect(counties[ci].centroidX - 5, counties[ci].centroidY - 5, 10,
+                   10, col);
+
+      // draw the weather symbol
+      drawWeatherSymbol(counties[ci].centroidX, counties[ci].centroidY + 10,
+                        cf[ci].symbol[hour], 8);
+    }
+
+    // pause, then clear overlays (redraw map)
+    delay(500);
+  }
+
+  // When both buttons held, return to menu
+  while (
+      !(digitalRead(PIN_BUTTON_1) == LOW && digitalRead(PIN_BUTTON_2) == LOW)) {
+    delay(50);
+  }
+  delay(200);
+  currentScreen = SCREEN_MENU;
+  showMenuScreen();
 }
 
 void drawWeatherSymbol(int x, int y, int symbol, int r) {
