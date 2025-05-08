@@ -23,32 +23,35 @@ TFT_eSPI tft = TFT_eSPI();
 #define DISPLAY_WIDTH 320
 #define DISPLAY_HEIGHT 170
 
-// City table & dynamic URL builders
+// City definitions and URL builders
+// A geographic point with a name and coordinates
 struct City {
   const char *name;
   float lat, lon;
 };
 
+// Predefined list of cities
 constexpr City cities[] = {{"Karlskrona", 56.18f, 15.59f},
                            {"Stockholm", 59.3293f, 18.0686f},
                            {"Gothenburg", 57.7089f, 11.9746f},
                            {"Malmo", 55.6050f, 13.0038f}};
 
 constexpr uint8_t cityCount = sizeof(cities) / sizeof(cities[0]);
-uint8_t currentCityIndex = 0; // will sync in loadSettings()
+uint8_t currentCityIndex = 0; // synced in loadSettings()
 
 struct Settings {
-  String city;
-  String parameter;
-  bool useFahrenheit;
+  String city;        // Currently selected city name
+  String parameter;   // API key for historical parameter
+  bool useFahrenheit; // true => °F, false => °C
 };
 
 Settings settings;
 Preferences prefs;
 
+// Available weather parameters for history graph
 struct Param {
-  const char *key;
-  const char *label;
+  const char *key;   // API field name
+  const char *label; // human-friendly label
 };
 const Param paramOptions[] = {{"temperature_2m", "Temperature"},
                               {"relative_humidity_2m", "Relative Humidity"},
@@ -57,12 +60,40 @@ const Param paramOptions[] = {{"temperature_2m", "Temperature"},
 const uint8_t paramCount = sizeof(paramOptions) / sizeof(paramOptions[0]);
 uint8_t paramIndex = 0;
 
+// Screen definitions for menu navigation
+enum Screen {
+  SCREEN_MENU,
+  SCREEN_FORECAST,
+  SCREEN_HISTORY,
+  SCREEN_SETTINGS,
+  SCREEN_PARAM_SELECT,
+  SCREEN_CITY_SELECT
+};
+
+Screen currentScreen = SCREEN_MENU;
+
+// Forward declarations
+void showMenuScreen();
+void showSettingsScreen();
+void showBootScreen();
+bool fetch24hForecast();
+bool fetchHistoryData();
+void displayForecastCard(uint8_t idx);
+void displayHistoryGraph(int startday);
+String makeForecastUrl();
+String makeHistoryUrl();
+float toDisplayTemp(float c);
+const char *unitLabel();
+void drawWeatherSymbol(int x, int y, int symbol, int r);
+
+// Load/save persistent settings to Preferences
 void loadSettings() {
   prefs.begin("weather", false);
   settings.city = prefs.getString("city", "Karlskrona");
   settings.parameter = prefs.getString("param", paramOptions[0].key);
   settings.useFahrenheit = prefs.getBool("fahrenheit", false);
   prefs.end();
+
   // sync the index so makeForecastUrl/HistoryUrl pick the right lat/lon
   for (uint8_t i = 0; i < cityCount; ++i) {
     if (settings.city == cities[i].name) {
@@ -72,6 +103,7 @@ void loadSettings() {
   }
 }
 
+// Persist current settings to Preferences
 void saveSettings() {
   prefs.begin("weather", false);
   prefs.putString("city", settings.city);
@@ -85,10 +117,8 @@ void showLoadingScreen(const char *msg) {
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setTextSize(2);
-  // center horizontally
   int16_t x = (DISPLAY_WIDTH - tft.textWidth(msg, 2)) / 2;
-  // vertically a bit above center
-  int16_t y = DISPLAY_HEIGHT / 2 - tft.fontHeight(1);
+  int16_t y = (DISPLAY_HEIGHT - tft.fontHeight(1)) / 2;
   tft.drawString(msg, x, y);
 }
 
@@ -101,25 +131,23 @@ struct ForecastHour {
 
 ForecastHour forecast24h[24];
 
-// hourly/7‑day history buffer
+// Constants for history buffer dimensions
 static const int HISTORY_DAYS = 30;
 static const int HOURS_PER_DAY = 24;
 
-// labels and values [day][hour]
-String historyDayLabels[HISTORY_DAYS];
+// Buffers for history data
+String historyDayLabels[HISTORY_DAYS]; // Date string per day
 float historyHourly[HISTORY_DAYS][HOURS_PER_DAY];
-int historyDaysFetched = 0;
+int historyDaysFetched = 0;               // Count of fully populated days
+int currentHistoryDay = HISTORY_DAYS - 1; // Index of the day shown now
 
-// which day is showing now (0 = oldest, HISTORY_DAYS−1 = most recent)
-int currentHistoryDay = HISTORY_DAYS - 1;
-
-// US3.2B: Scroll through 6 h windows in the 24 h forecast
+// (US3.2B) Use buttons to step through hourly forecast entries
 static uint8_t forecastStart = 0;
 
-// after your HISTORY_DAYS/HOURS_PER_DAY definitions
+// Records number of valid hours fetched per day
 static int historyHoursFetched[HISTORY_DAYS];
 
-// human‑friendly names for parameters
+// Map API key to human-friendly label
 String parameterLabel(const String &p) {
   if (p == "temperature_2m")
     return "Temperature";
@@ -132,23 +160,11 @@ String parameterLabel(const String &p) {
   return p;
 }
 
-// round helpers
+// Round integer down/up to nearest multiple of 5
 int roundDown5(int v) { return (v / 5) * 5; }
 int roundUp5(int v) { return ((v + 4) / 5) * 5; }
 
-// Screens
-enum Screen {
-  SCREEN_MENU,
-  SCREEN_FORECAST,
-  SCREEN_HISTORY,
-  SCREEN_SETTINGS,
-  SCREEN_PARAM_SELECT,
-  SCREEN_CITY_SELECT,
-  SCREEN_SWEDEN_MAP
-};
-
-Screen currentScreen = SCREEN_MENU;
-
+// Build URL for SMHI 24-hour forecast
 String makeForecastUrl() {
   auto &c = cities[currentCityIndex];
   String url = String("https://opendata-download-metfcst.smhi.se/") +
@@ -157,20 +173,18 @@ String makeForecastUrl() {
 
   Serial.print("Forecast URL: ");
   Serial.println(url);
-
   return url;
 }
 
+// Build URL for Open-Meteo archive API
 String makeHistoryUrl() {
   auto &c = cities[currentCityIndex];
-
-  // compute today and 7 days ago in UTC
   time_t now = time(nullptr);
   struct tm tm_end, tm_start;
   gmtime_r(&now, &tm_end);
   tm_start = tm_end;
-  tm_start.tm_mday -= HISTORY_DAYS; // go back N days
-  mktime(&tm_start);                // normalize
+  tm_start.tm_mday -= HISTORY_DAYS;
+  mktime(&tm_start);
 
   char bufStart[11], bufEnd[11];
   strftime(bufStart, sizeof(bufStart), "%Y-%m-%d", &tm_start);
@@ -194,35 +208,23 @@ String makeHistoryUrl() {
   return String(url);
 }
 
-// Menu items and index
-const char *menuItems[] = {"Forecast", "History", "Sweden Map", "Settings"};
+// Main menu entries and selection index
+const char *menuItems[] = {"Forecast", "History", "Settings"};
 const uint8_t menuItemCount = sizeof(menuItems) / sizeof(menuItems[0]);
 uint8_t menuIndex = 0;
 
-// Settings items and index
+// Settings-menu entries and selection index
 const char *settingsItems[] = {"City", "Parameter", "Change unit",
                                "Reset to default"};
 const uint8_t settingsCount = sizeof(settingsItems) / sizeof(settingsItems[0]);
 uint8_t settingsIndex = 0;
 
-static const uint8_t VISIBLE_CITY_COUNT = 5; // show 5 at a time
+// Show up to 5 cities at once
+static const uint8_t VISIBLE_CITY_COUNT = 5;
 uint8_t cityIndex = 0;  // which entry is currently highlighted
 uint8_t cityScroll = 0; // top of the scrolling window
 
-// Forward declaration for menu renderer
-void showMenuScreen();
-
-void showSettingsScreen();
-
-// Function prototypes
-void showBootScreen();
-bool fetch24hForecast();
-void displayHistoryGraph(int startDay);
-void displayForecastCard(uint8_t idx);
-void drawWeatherSymbol(int x, int y, int symbol, int r);
-bool fetchHistoryData();
-
-// convert raw °C → display unit
+// Convert Celsius to display unit
 float toDisplayTemp(float celsius) {
   if (settings.useFahrenheit) {
     return celsius * 9.0f / 5.0f + 32.0f;
@@ -230,7 +232,7 @@ float toDisplayTemp(float celsius) {
     return celsius;
   }
 }
-// helper for unit label
+// Return the temperature unit label
 const char *unitLabel() { return settings.useFahrenheit ? "F" : "C"; }
 
 /**
@@ -269,16 +271,12 @@ void setup() {
   tft.drawString("Connected to WiFi", 10, 10);
   Serial.println("Connected to WiFi");
 
-  configTime(0, 0, "pool.ntp.org", "time.nist.gov"); // set up NTP
-  delay(2000); // give it a moment to fetch time
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov"); // Initialize NTP
+  delay(2000);                                       // Allow time sync
 
-  // Show boot screen (User story US1.1)
-  showBootScreen();
+  showBootScreen(); // Show boot screen (User story US1.1)
+  loadSettings();   // Loading settings
 
-  // Loading settings
-  loadSettings();
-
-  // Menu startup (US2.1 /2.2B )
   currentScreen = SCREEN_MENU;
   Serial.println("Showing Menu…");
   showMenuScreen();
@@ -503,17 +501,14 @@ void loop() {
           // build a YYYY‑MM‑DD string for “now” in UTC
           time_t now = time(nullptr);
           struct tm now_tm;
-          localtime_r(&now, &now_tm); //  ⟵ normalize into a tm struct
+          localtime_r(&now, &now_tm); // normalize into a tm struct
           char today[11];
           strftime(today, sizeof(today), "%Y-%m-%d", &now_tm);
 
-          Serial.printf("  today=%s, lastDayLabel=%s\n", today,
-                        historyDayLabels[currentHistoryDay].c_str());
-
           if (historyDayLabels[currentHistoryDay] == String(today)) {
-            // re‑fetch 24h forecast into forecast24h[]
+            // re‑fetch 24h forecast
             fetch24hForecast();
-            // copy each of the 24 forecast hours into historyHourly
+            // copy each of the 24 forecast hours
             for (int h = 0; h < 24; h++) {
               historyHourly[currentHistoryDay][h] = forecast24h[h].temp;
             }
@@ -525,11 +520,7 @@ void loop() {
           displayHistoryGraph(currentHistoryDay);
         }
         break;
-      case 2: // Sweden Map
-        currentScreen = SCREEN_SWEDEN_MAP;
-        showSwedenForecastScreen();
-        break;
-      case 3:
+      case 2:
         currentScreen = SCREEN_SETTINGS;
         settingsIndex = 0;
         Serial.println("Showing settings...");
@@ -550,7 +541,7 @@ void loop() {
   }
 }
 
-// Display a simple boot screen with version info
+// Display a boot screen
 void showBootScreen() {
   Serial.println("Showing boot screen…");
   tft.fillScreen(TFT_BLACK);
@@ -580,12 +571,12 @@ bool fetch24hForecast() {
     Serial.printf("Fetching 24h forecast (try %d/%d)…\n", attempt, maxRetries);
 
     HTTPClient http;
-    http.useHTTP10(true);          // force HTTP/1.0
+    http.useHTTP10(true);
     http.begin(makeForecastUrl()); // set URL
     http.addHeader("Accept", "application/json");
-    http.addHeader("Accept-Encoding", "identity"); // no compression
+    http.addHeader("Accept-Encoding", "identity");
 
-    int httpCode = http.GET(); // perform the GET
+    int httpCode = http.GET();
     if (httpCode == HTTP_CODE_OK) {
       // parse JSON directly from the stream
       const size_t JSON_CAPACITY = 200000;
@@ -613,7 +604,7 @@ bool fetch24hForecast() {
           }
         }
         Serial.println("Forecast parsed successfully");
-        return true; // success!
+        return true;
       } else {
         Serial.printf("JSON parse failed: %s — retrying…\n", err.c_str());
       }
@@ -642,8 +633,8 @@ bool fetchHistoryData() {
     Serial.printf("Fetching history (try %d/%d)…\n", attempt, maxRetries);
 
     HTTPClient http;
-    http.begin(makeHistoryUrl()); // set URL
-    int code = http.GET();        // perform the GET
+    http.begin(makeHistoryUrl());
+    int code = http.GET();
 
     if (code == HTTP_CODE_OK) {
       String body = http.getString(); // read full payload
@@ -775,7 +766,7 @@ const int NUM_C_TICKS = sizeof(TEMP_C_TICKS) / sizeof(TEMP_C_TICKS[0]);
 void displayHistoryGraph(int dayIdx) {
   tft.fillScreen(TFT_BLACK);
 
-  // 1) Header split left/right
+  // Header split left/right
   tft.setTextSize(1);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   // left: param + date
@@ -787,18 +778,18 @@ void displayHistoryGraph(int dayIdx) {
   tft.setTextDatum(TR_DATUM);
   tft.drawString(cities[currentCityIndex].name, DISPLAY_WIDTH - 10, 10);
 
-  // 2) Margins and axes endpoints
+  // Margins and axes endpoints
   const int M_L = 40, M_R = 10, M_T = 25, M_B = 20;
   const int gx0 = M_L;
   const int gy0 = DISPLAY_HEIGHT - M_B;
   const int gx1 = DISPLAY_WIDTH - M_R;
   const int gy1 = M_T;
 
-  // 3) Draw axes
+  // Draw axes
   tft.drawLine(gx0, gy0, gx1, gy0, TFT_WHITE);
   tft.drawLine(gx0, gy0, gx0, gy1, TFT_WHITE);
 
-  // 4) Compute dynamic Y‑bounds over only hours that exist
+  // Compute dynamic Y‑bounds over only hours that exist
   int hoursAvail = historyHoursFetched[dayIdx];
   float mn = 1e6, mx = -1e6;
   for (int h = 0; h < hoursAvail; h++) {
@@ -813,7 +804,7 @@ void displayHistoryGraph(int dayIdx) {
   if (yMin == yMax)
     yMax = yMin + 5;
 
-  // 5) Y‑ticks every 5 units
+  // Y‑ticks every 5 units
   tft.setTextSize(1);
   tft.setTextDatum(TR_DATUM);
   int tickCount = 5;
@@ -826,7 +817,7 @@ void displayHistoryGraph(int dayIdx) {
     tft.drawString(String(v), gx0 - 5, yy);
   }
 
-  // 6) X‑ticks every 4h from 0→24
+  // X‑ticks every 4h from 0→24
   tft.setTextDatum(TC_DATUM);
   for (int xh = 0; xh <= HOURS_PER_DAY; xh += 4) {
     int xx = gx0 + (gx1 - gx0) * xh / HOURS_PER_DAY;
@@ -834,7 +825,7 @@ void displayHistoryGraph(int dayIdx) {
     tft.drawString(String(xh), xx, gy0 + 5);
   }
 
-  // 7) Plot the line+dots only for valid hours
+  // Plot the line+dots only for valid hours
   tft.setTextColor(TFT_YELLOW, TFT_BLACK);
   int prevX = -1, prevY = -1;
   for (int h = 0; h < hoursAvail; h++) {
@@ -921,13 +912,13 @@ void showSettingsScreen() {
 void showParameterScreen() {
   tft.fillScreen(TFT_BLACK);
 
-  // 1) Header
+  // Header
   tft.setTextSize(2);
   tft.setTextColor(TFT_BLUE, TFT_BLACK);
   tft.setTextDatum(TL_DATUM);
   tft.drawString("Choose parameter:", 10, 10);
 
-  // 2) List items
+  // List items
   tft.setTextSize(2);
   tft.setTextDatum(TL_DATUM);
   int fh = tft.fontHeight();
@@ -950,13 +941,13 @@ void showParameterScreen() {
 void showCityScreen() {
   tft.fillScreen(TFT_BLACK);
 
-  // 1) Draw the header from the top‑left
+  // Draw the header from the top‑left
   tft.setTextSize(2);
   tft.setTextDatum(TL_DATUM);
   tft.setTextColor(TFT_BLUE, TFT_BLACK);
   tft.drawString("Choose city:", 10, 10);
 
-  // 2) Draw the list in the same datum & color
+  // Draw the list in the same datum & color
   tft.setTextSize(2);
   tft.setTextDatum(TL_DATUM);
   int fh = tft.fontHeight();
@@ -980,7 +971,7 @@ void showCityScreen() {
     tft.drawString(cities[idx].name, 10, y);
   }
 
-  // 3) Finally draw the arrows (centered) with their own datum & color
+  // Finally draw the arrows (centered) with their own datum & color
   tft.setTextSize(1);
   tft.setTextDatum(TC_DATUM);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
@@ -992,111 +983,17 @@ void showCityScreen() {
   }
 }
 
-void showSwedenForecastScreen() {
-  // 1) Clear & title
-  tft.fillScreen(TFT_BLACK);
-  tft.setTextSize(2);
-  tft.setTextColor(TFT_BLUE, TFT_BLACK);
-  tft.setTextDatum(TL_DATUM);
-  tft.drawString("Sweden Forecast", 10, 10);
-
-  // 2) Draw base map (you need to convert your .bmp to a byte array)
-  //    Example: tft.pushImage(0, 25, SWEDEN_MAP_W, SWEDEN_MAP_H, swedenMapBMP);
-  //    You’ll need to prepare that bitmap in your data folder.
-
-  // 3) Fetch county forecasts
-  struct County {
-    const char *id;     // SMHI county ID e.g. "14" (Blekinge län)
-    uint16_t centroidX; // on‐screen pixel
-    uint16_t centroidY;
-  };
-  static const County counties[] = {
-      {"10", 45, 120}, // example coords
-      {"12", 90, 60},
-      // … all 21 län…
-  };
-  const int countyCount = sizeof(counties) / sizeof(counties[0]);
-
-  // Pre‐fetch 24h for each county into a temp buffer:
-  struct CountyForecast {
-    float temp[24];
-    int symbol[24];
-  };
-  static CountyForecast cf[21];
-
-  showLoadingScreen("Fetching Sweden...");
-  for (int ci = 0; ci < countyCount; ++ci) {
-    // build URL:  api/category/pmp3g/version/2/geotype/county/{id}/data.json
-    String url = String("https://opendata-download-metfcst.smhi.se/") +
-                 "api/category/pmp3g/version/2/geotype/county/id/" +
-                 counties[ci].id + "/data.json";
-
-    HTTPClient http;
-    http.begin(url);
-    int code = http.GET();
-    if (code == HTTP_CODE_OK) {
-      DynamicJsonDocument doc(150000);
-      auto err = deserializeJson(doc, http.getStream());
-      if (!err) {
-        auto ts = doc["timeSeries"].as<JsonArray>();
-        for (int h = 0; h < 24 && h < ts.size(); ++h) {
-          cf[ci].temp[h] =
-              ts[h]["parameters"][0]["values"][0].as<float>(); // find “t”
-          cf[ci].symbol[h] =
-              ts[h]["parameters"][1]["values"][0].as<int>(); // find “Wsymb2”
-        }
-      }
-    }
-    http.end();
-    delay(100); // be nice to SMHI
-  }
-
-  // 4) Animate 24 h
-  for (int hour = 0; hour < 24; ++hour) {
-    // redraw map
-    // tft.pushImage(0,25, SWEDEN_MAP_W, SWEDEN_MAP_H, swedenMapBMP);
-
-    // overlay each county
-    for (int ci = 0; ci < countyCount; ++ci) {
-      float c = toDisplayTemp(cf[ci].temp[hour]);
-      // map temp→color (blue→cyan→green→yellow→red)
-      uint16_t col = tft.color565(constrain((c + 20) * 4, 0, 255), // rough ramp
-                                  constrain((30 - c) * 4, 0, 255),
-                                  constrain((20 - c) * 4, 0, 255));
-      // fill a small square at centroid
-      tft.fillRect(counties[ci].centroidX - 5, counties[ci].centroidY - 5, 10,
-                   10, col);
-
-      // draw the weather symbol
-      drawWeatherSymbol(counties[ci].centroidX, counties[ci].centroidY + 10,
-                        cf[ci].symbol[hour], 8);
-    }
-
-    // pause, then clear overlays (redraw map)
-    delay(500);
-  }
-
-  // When both buttons held, return to menu
-  while (
-      !(digitalRead(PIN_BUTTON_1) == LOW && digitalRead(PIN_BUTTON_2) == LOW)) {
-    delay(50);
-  }
-  delay(200);
-  currentScreen = SCREEN_MENU;
-  showMenuScreen();
-}
-
 void drawWeatherSymbol(int x, int y, int symbol, int r) {
   tft.setTextDatum(MC_DATUM);
   int off = r / 2;
 
   switch (symbol) {
-  // — Clear & Sun —
+  // Clear & Sun
   case 1: { // Clear sky
     tft.fillCircle(x, y, r, TFT_YELLOW);
 
-    int rayLen = r * 0.4;
-    int gap = r * 0.1;
+    int rayLen = r * 0.3;
+    int gap = r * 0.05;
     int start = r + gap;
 
     // Sun rays
@@ -1114,7 +1011,7 @@ void drawWeatherSymbol(int x, int y, int symbol, int r) {
     tft.fillCircle(x, y, r, TFT_YELLOW);
     break;
 
-  // — Peeking sun behind cloud —
+  // Peeking sun behind cloud
   case 3: // variable cloudiness
   case 4: // halfclear sky
     // sun
@@ -1124,7 +1021,7 @@ void drawWeatherSymbol(int x, int y, int symbol, int r) {
     drawCloud(x + off / 1.5, y, r, TFT_WHITE);
     break;
 
-  // — Cloudy / Overcast —
+  // Cloudy / Overcast
   case 5: // cloudy
   case 6: // overcast
     drawCloud(x, y, r, TFT_WHITE);
@@ -1146,7 +1043,7 @@ void drawWeatherSymbol(int x, int y, int symbol, int r) {
     }
   } break;
 
-  // — Rain & Showers —
+  // Rain & Showers
   case 8:
   case 9:
   case 10: // showers
@@ -1162,10 +1059,9 @@ void drawWeatherSymbol(int x, int y, int symbol, int r) {
     }
     break;
 
-  // — Thunder —
+  // Thunder
   case 11:
   case 21: { // Thunder
-    // draw cloud behind the bolt
     drawCloud(x, y - off / 2, r, TFT_LIGHTGREY);
     // Bolt
     int bx = x, by = y + off / 4;
@@ -1174,7 +1070,7 @@ void drawWeatherSymbol(int x, int y, int symbol, int r) {
     tft.drawLine(bx + r / 4, by + r / 2, bx, by + r, TFT_YELLOW);
   } break;
 
-  // — Sleet —
+  // Sleet
   case 12:
   case 13:
   case 14:
@@ -1198,7 +1094,7 @@ void drawWeatherSymbol(int x, int y, int symbol, int r) {
     }
     break;
 
-  // — Snow —
+  // Snow
   case 15:
   case 16:
   case 17:
@@ -1221,7 +1117,7 @@ void drawWeatherSymbol(int x, int y, int symbol, int r) {
     }
     break;
 
-  // — Fallback —
+  // Fallback
   default:
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.drawString("?", x, y);
@@ -1236,12 +1132,12 @@ void showMenuScreen() {
   tft.fillScreen(TFT_BLACK);
   tft.setTextDatum(TL_DATUM);
 
-  // 1) Title
+  // Title
   tft.setTextSize(2);
   tft.setTextColor(TFT_BLUE, TFT_BLACK);
   tft.drawString("Menu:", 10, 10);
 
-  // 2) List all menu items, highlighting the current one
+  // List all menu items, highlighting the current one
   const int lineHeight = 30;
   const int startY = 40;
 
