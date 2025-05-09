@@ -31,10 +31,12 @@ struct City {
 };
 
 // Predefined list of cities
-constexpr City cities[] = {{"Karlskrona", 56.18f, 15.59f},
-                           {"Stockholm", 59.3293f, 18.0686f},
-                           {"Gothenburg", 57.7089f, 11.9746f},
-                           {"Malmo", 55.6050f, 13.0038f}};
+constexpr City cities[] = {
+    {"Karlskrona", 56.18f, 15.59f},     {"Stockholm", 59.3293f, 18.0686f},
+    {"Gothenburg", 57.7089f, 11.9746f}, {"Malmo", 55.6050f, 13.0038f},
+    {"Ronneby", 56.2072f, 15.2878f},    {"Uppsala", 59.8586f, 17.6389f},
+    {"Linkoping", 58.4108f, 15.6214f},  {"Lund", 55.7047f, 13.1910f},
+    {"Orebro", 59.2753f, 15.2134f},     {"Helsingborg", 56.0465f, 12.6945f}};
 
 constexpr uint8_t cityCount = sizeof(cities) / sizeof(cities[0]);
 uint8_t currentCityIndex = 0; // synced in loadSettings()
@@ -42,7 +44,7 @@ uint8_t currentCityIndex = 0; // synced in loadSettings()
 struct Settings {
   String city;        // Currently selected city name
   String parameter;   // API key for historical parameter
-  bool useFahrenheit; // true => °F, false => °C
+  bool useFahrenheit; // true: °F, false: °C
 };
 
 Settings settings;
@@ -141,7 +143,7 @@ float historyHourly[HISTORY_DAYS][HOURS_PER_DAY];
 int historyDaysFetched = 0;               // Count of fully populated days
 int currentHistoryDay = HISTORY_DAYS - 1; // Index of the day shown now
 
-// (US3.2B) Use buttons to step through hourly forecast entries
+// Use buttons to step through hourly forecast entries
 static uint8_t forecastStart = 0;
 
 // Records number of valid hours fetched per day
@@ -274,7 +276,7 @@ void setup() {
   configTime(0, 0, "pool.ntp.org", "time.nist.gov"); // Initialize NTP
   delay(2000);                                       // Allow time sync
 
-  showBootScreen(); // Show boot screen (User story US1.1)
+  showBootScreen(); // Show boot screen
   loadSettings();   // Loading settings
 
   currentScreen = SCREEN_MENU;
@@ -758,10 +760,6 @@ void displayForecastCard(uint8_t idx) {
   tft.setTextDatum(BR_DATUM);
   tft.drawString("Prev >", DISPLAY_WIDTH - 10, DISPLAY_HEIGHT - 10);
 }
-
-// Precompute Y‑ticks for temperature
-const int TEMP_C_TICKS[] = {-10, 0, 10, 20, 30};
-const int NUM_C_TICKS = sizeof(TEMP_C_TICKS) / sizeof(TEMP_C_TICKS[0]);
 
 void displayHistoryGraph(int dayIdx) {
   tft.fillScreen(TFT_BLACK);
