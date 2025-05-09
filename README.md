@@ -1,77 +1,69 @@
-# ESP32-S3-Template
+# ESP32-S3 Weather Dashboard
 
-Welcome to the lab using the ESP32-S3 LilyGO!
-
-This repository serves as a foundation for software engineering projects aimed at the ESP32 hardware.
-This document will guide you through the setup process and help you prepare to work with your ESP32 hardware.
+A menu-driven weather dashboard for the ESP32-S3 LilyGO, fetching 24 h forecasts from SMHI and up to 30 days of historical data from Open-Meteo.
 
 ---
 
-# How to get started
+## 🚀 Features
 
-This project will work regardless of the operating system you use, and there are appended guides for each below.
-Each of these tutorials is done on a fresh install of Visual Studio Code, which is the IDE you must use to complete this project.
-Setting up and configuring the project will take multiple minutes, up to 15 min so be patient with the software.
+- **US1: Start-Up**  
+  - [x] US1.1: Show boot screen with version & team number for 3 s  
+  - [x] US1.2: Display next 24 h temperature forecast on startup  
+  - [x] US1.2B: Show temperature + weather symbols (clear, rain, etc.)
 
-## General
+- **US2: Menu Navigation**  
+  - [x] US2.1: Navigate between Forecast, History, Settings with two buttons  
+  - [x] US2.2: Open menu from anywhere by holding both buttons  
+  - [x] US2.2B: Confirm long-hold opens menu overview
 
-1. Install Visual Studio Code
-   * Visit [Visual Studio Code's website](https://code.visualstudio.com/download) and download the latest version or use the package manager of your system.
-   * Run `Visual Studio Code` and follow the steps.
-2. Install the correct extension.
-   * Head over to the extensions tab on your left.
-   * Search for ["PlatformIO IDE"](https://marketplace.visualstudio.com/items?itemName=platformio.platformio-ide) and install it.
+- **US3: Historical Data**  
+  - [x] US3.1: Menu option to view historical weather data  
+  - [x] US3.2: Show up to 30 days of daily data for selected parameter  
+  - [x] US3.2B: Scroll in 6 h windows through 24 h history
 
-## Windows
+- **US4: Settings & Configuration**  
+  - [x] US4.1: Settings menu to choose options  
+  - [x] US4.2: Select weather parameter (Temperature, Humidity, Wind Speed, Precipitation)  
+  - [x] US4.3: Select city from list (Karlskrona, Stockholm, Gothenburg, Malmö, Ronneby, Helsingborg, Uppsala, Linköping, Lund, Örebro)  
+  - [x] US4.4: Reset settings to default  
+  - [x] US4.5: Persist default city & parameter across restarts  
+  - [x] US4.6: Units choice (°C/°F) is saved
 
-3. Install the Clang compiler and C++ extension for Visual Studio Code.
-   * (optional) If you want/need to use Windows Subsystem for Linux (WSL) have at the [documentation](https://code.visualstudio.com/docs/remote/wsl).
-
-## Linux
-
-3. Install the Clang compiler and C++ extension for Visual Studio Code.
-
-4. Run the following command to add access to the `ttyACM0` port in order to avoid complications [1]
-   * `sudo adduser $USER $(stat --format="%G" /dev/ttyACM0 )`
-
-## MacOS
-
-3. Run `git -v` in the Terminal app to check whether git and the macOS command line tools are installed. If the command line tools are not installed, a pop up will appear to install it.
-
-## How to run the program
-
-1. Open the locally cloned repository with Visual Studio Code
-    * If the "Do you trust the authors of the files in this folder?" dialog appears, click on "Yes, I trust the authors"
-2. Open up the file `project/project.ino`
-3. Connect your ESP32 to your computer via a USB cable.
-4. Build and upload the project to the device. See screenshot.
-
-![[screenshot](./assets/screenshot.png)](./assets/screenshot.png)
+> **US5 (Extended map forecast) has been skipped for this project.**
 
 ---
 
-## What to add where
+## 🛠️ Getting Started
 
-Your code belongs in one file and one file only. The only place you should add, change, or remove things from is the [**project.ino**](project/project.ino) file in the `project` folder. Changing anything else might break the code and cause a lot of headaches for all involved parties.
+### Prerequisites
 
-## Areas of addition
+- **IDE:** Visual Studio Code  
+- **Extension:** PlatformIO IDE ([install](https://marketplace.visualstudio.com/items?itemName=platformio.platformio-ide))  
+- **Board:** ESP32-S3 LilyGO (setup in `platformio.ini`)  
+- **Libraries:** All dependencies managed by PlatformIO (`ArduinoJson`, `TFT_eSPI`, etc.)
 
-You are meant to write a small application for the computer that retrieves the weather for a given location, and most of that code belongs in your own functions and the `void loop()` function at the bottom of the `project.ino` file.
+### Setup & Build
 
-## How to Connect to WiFi
+1. Clone this repo and open in VS Code.  
+2. Install PlatformIO when prompted.  
+3. Edit `src/main.cpp` (or `project.ino`) to set your **SSID**/ **PASSWORD**.  
+4. Connect your ESP32 via USB.  
+5. In the PlatformIO sidebar, click **Build** then **Upload**.
 
-The ESP32-S3 LilyGO has a built-in WiFi module, which allows you to connect to the internet.
-However, it does not work with eduroam, so you will need to connect to a different WiFi network.
-To connect to WiFi, you need to provide your SSID and password in the [project/project.ino](./project/project.ino) file.
+### Running
 
-## References
+- Upon reset, you’ll see the boot screen (3 s), then the main menu.  
+- Use the two buttons to move **Up**/ **Down**; press **both** to select.
 
-[1] This command adds the current user ($USER) to the group that owns the /dev/ttyACM0 device.
-**Breakdown**:
+---
 
-* `sudo`: Runs the command with superuser (root) privileges.
-* `adduser` `$USER`: Adds the current user to a specified group.
-* `$(stat --format="%G" /dev/ttyACM0)`: retrieves the group name that owns the /dev/ttyACM0 device.
-* `$()`: executes this command and substitutes its output.
+## 📁 Repository Structure
 
-Purpose: This is useful when working with serial devices (like Arduino or other USB-connected hardware). By adding yourself to the device's group, you gain permission to access `/dev/ttyACM0` without needing sudo every time.
+```text
+/
+├─ src/
+│  └─ main.cpp      ← your entire application
+├─ lib/             ← any custom libraries
+├─ assets/          ← screenshots, diagrams
+├─ platformio.ini   ← project & board config
+└─ README.md        ← you are here
