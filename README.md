@@ -60,3 +60,15 @@ A menu driven weather dashboard for a ESP32, fetching 24 h forecasts from SMHI a
 - Upon start, you’ll see the boot screen, then the main menu.  
 - Use the two buttons to move **Up**/ **Down**; press **both** to select.
 - Hold the two buttons to **Go back to the menu**
+
+---
+
+## Licenses & Attribution
+
+- **SMHI Open Data API** (forecast):  
+  Licensed under [CC-BY 4.0].  
+
+- **Open-Meteo Archive API** (historical):  
+  Open-source, permissively licensed https://open-meteo.com/en/docs for details.
+
+We fetch data at runtime only (no permanent storage), respect rate limits, and always display proper attribution in our UI and documentation.
