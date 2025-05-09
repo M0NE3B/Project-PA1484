@@ -38,6 +38,8 @@ A menu driven weather dashboard for a ESP32, fetching 24 h forecasts from SMHI a
     - Weather symbols for each area.
     - A looped animation displaying the hourly forecast for the next 24 hours
 
+---
+
 ## Getting Started
 
 ### Prerequisites
@@ -66,9 +68,11 @@ A menu driven weather dashboard for a ESP32, fetching 24 h forecasts from SMHI a
 ## Licenses & Attribution
 
 - **SMHI Open Data API** (forecast):  
-  Licensed under [CC-BY 4.0].  
+  Licensed under CC-BY 4.0.
+  See https://www.smhi.se/data/om-smhis-data/villkor-for-anvandning for details.
 
 - **Open-Meteo Archive API** (historical):  
-  Open-source, permissively licensed https://open-meteo.com/en/docs for details.
+  Open-source, permissively licensed.
+  See https://open-meteo.com/en/docs for details.
 
 We fetch data at runtime only (no permanent storage), respect rate limits, and always display proper attribution in our UI and documentation.
