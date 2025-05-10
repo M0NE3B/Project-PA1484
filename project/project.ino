@@ -12,8 +12,8 @@
 #include <esp_task_wdt.h>
 #include <time.h>
 
-String ssid = "";      // Insert WIFI SSID
-String password = "";  // Insert WIFI PASSWORD
+String ssid = "";     // Insert WIFI SSID
+String password = ""; // Insert WIFI PASSWORD
 
 // "tft" is the graphics libary, which has functions to draw on the screen
 TFT_eSPI tft = TFT_eSPI();
@@ -397,9 +397,15 @@ void loop() {
         Serial.println("Unit changed");
         settings.useFahrenheit = !settings.useFahrenheit;
         break;
-      case 3:
+      case 3: // Reset settings (Karlskrona, Temperature, Celcius)
         Serial.println("Reset settings");
         settings = {"Karlskrona", paramOptions[0].key, false};
+        for (uint8_t i = 0; i < cityCount; ++i) {
+          if (settings.city == cities[i].name) {
+            currentCityIndex = i;
+            break;
+          }
+        }
         break;
       }
       saveSettings();
