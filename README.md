@@ -66,13 +66,12 @@ A menu driven weather dashboard for a ESP32, fetching 24 h forecasts from SMHI a
 ---
 
 ## Licenses & Attribution
+Our data is brought from open source APIs licensed under CC-BY 4.0.
 
-- **SMHI Open Data API** (forecast):  
-  Licensed under CC-BY 4.0.
-  See https://www.smhi.se/data/om-smhis-data/villkor-for-anvandning for details.
+- **SMHI Open Data API** (forecast):
+  Read more here: https://www.smhi.se/data/om-smhis-data/villkor-for-anvandning
 
 - **Open-Meteo Archive API** (historical):  
-  Open-source, permissively licensed.
-  See https://open-meteo.com/en/docs for details.
+  Read more here: https://open-meteo.com/en/terms
 
 We fetch data at runtime only (no permanent storage), respect rate limits, and always display proper attribution in our UI and documentation.
