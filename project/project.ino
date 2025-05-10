@@ -12,7 +12,6 @@
 #include <esp_task_wdt.h>
 #include <time.h>
 
-// Remember to remove these before commiting in GitHub
 String ssid = "";      // Insert WIFI SSID
 String password = "";  // Insert WIFI PASSWORD
 
