@@ -13,8 +13,8 @@
 #include <time.h>
 
 // Remember to remove these before commiting in GitHub
-String ssid = "BTH_Guest";
-String password = "Rover21Piggelin";
+String ssid = "";      // Insert WIFI SSID
+String password = "";  // Insert WIFI PASSWORD
 
 // "tft" is the graphics libary, which has functions to draw on the screen
 TFT_eSPI tft = TFT_eSPI();
