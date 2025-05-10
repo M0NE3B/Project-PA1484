@@ -61,7 +61,7 @@ A menu driven weather dashboard for a ESP32, fetching 24 h forecasts from SMHI a
 
 - Upon start, you’ll see the boot screen, then the main menu.  
 - Use the two buttons to move **Up**/ **Down**; press **both** to select.
-- Hold the two buttons to **Go back to the menu**
+- **Hold** the both buttons to **go back to the menu**
 
 ---
 
